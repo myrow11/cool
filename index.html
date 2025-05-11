@@ -3,48 +3,36 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>NeoCity: Rogue AI – Ultimate Cyberpunk</title>
+  <title>NeoCity: Rogue AI – Ultimate Cyberpunk (Fixed)</title>
   <style>
-    /* ───────── GLOBAL & CANVAS ───────── */
     html,body{margin:0;padding:0;overflow:hidden;background:#000;color:#fff;font:14px monospace;}
-    #gameCanvas{display:block;margin:0 auto;background:#000;position:relative;z-index:1;}
-    /* Vignette & Color Wash */
-    body::after {
-      content:'';pointer-events:none;
-      position:fixed;top:0;left:0;width:100%;height:100%;
-      background:
-        radial-gradient(circle at center,rgba(0,0,0,0)50%,rgba(0,0,0,0.5)100%),
-        linear-gradient(45deg,rgba(102,0,255,0.05),rgba(0,255,255,0.05));
-      mix-blend-mode:multiply;z-index:5;
-    }
-    /* Scanlines */
-    body::before {
-      content:'';pointer-events:none;
-      position:fixed;top:0;left:0;width:100%;height:100%;
-      background:repeating-linear-gradient(to bottom,rgba(0,0,0,0)0px,rgba(0,0,0,0.05)1px);
-      mix-blend-mode:overlay;opacity:0.3;z-index:4;
-    }
-    /* ───────── UI PANELS & KEYS ───────── */
-    .panel{position:absolute;background:rgba(0,0,0,0.8);border:2px solid #0ff;border-radius:8px;padding:8px;display:none;z-index:10;}
+    #gameCanvas{display:block;margin:0 auto;position:relative;z-index:1;}
+    body::after{content:'';pointer-events:none;position:fixed;top:0;left:0;
+      width:100%;height:100%;
+      background:radial-gradient(circle at center,rgba(0,0,0,0)50%,rgba(0,0,0,0.5)100%),
+                 linear-gradient(45deg,rgba(102,0,255,0.05),rgba(0,255,255,0.05));
+      mix-blend-mode:multiply;z-index:5;}
+    body::before{content:'';pointer-events:none;position:fixed;top:0;left:0;
+      width:100%;height:100%;
+      background:repeating-linear-gradient(to bottom,rgba(0,0,0,0)0,rgba(0,0,0,0.05)1px);
+      mix-blend-mode:overlay;opacity:0.3;z-index:4;}
+    .panel{position:absolute;background:rgba(0,0,0,0.8);border:2px solid #0ff;border-radius:8px;
+      padding:8px;display:none;z-index:10;}
     .choice{display:inline-block;margin:4px;padding:6px 12px;background:#111;border:2px inset #444;
       color:#0ff;box-shadow:0 0 8px rgba(0,255,255,0.5),inset 0 0 4px rgba(0,255,255,0.3);
       cursor:pointer;user-select:none;font-family:'Courier New',monospace;}
     .choice:hover{background:#222;border-color:#0ff;
       box-shadow:0 0 12px rgba(0,255,255,0.7),inset 0 0 6px rgba(0,255,255,0.5);}
-    /* Dialogue */
     #dialoguePanel{bottom:10%;left:50%;transform:translateX(-50%);width:60%;display:flex;}
     #portrait{width:64px;height:64px;margin-right:8px;border:1px solid #0ff;border-radius:4px;}
-    /* HUD */
     #hud{position:absolute;top:10px;left:10px;z-index:5;}
     #repMeter,#skillTreeBtn{margin:4px;padding:4px;border:1px solid #0ff;}
-    /* Skill Tree */
     #skillPanel{top:50%;left:50%;transform:translate(-50%,-50%);width:70%;height:70%;overflow:auto;}
   </style>
 </head>
 <body>
   <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
 
-  <!-- Dialogue Panel -->
   <div id="dialoguePanel" class="panel">
     <img id="portrait" src="" alt="Portrait"/>
     <div>
@@ -53,13 +41,11 @@
     </div>
   </div>
 
-  <!-- HUD -->
   <div id="hud">
     <div id="repMeter">Reputation: 0</div>
     <button id="skillTreeBtn" class="choice">Skills</button>
   </div>
 
-  <!-- Skill Tree Overlay -->
   <div id="skillPanel" class="panel">
     <h3>Cyberware Skill Tree</h3>
     <ul id="skillList"></ul>
@@ -67,343 +53,191 @@
   </div>
 
 <script>
-(() => {
-  // ───────── CONSTANTS ─────────
-  const VIEW_W = 800, VIEW_H = 600;
-  const TILE   = 32, MAP_C = 50, MAP_R = 32;
-  const WORLD_W = MAP_C * TILE, WORLD_H = MAP_R * TILE;
+(function(){
+  // ───────── CONSTS ─────────
+  const VIEW_W=800, VIEW_H=600, TILE=32, MAP_C=50, MAP_R=32;
+  const WORLD_W = MAP_C*TILE, WORLD_H = MAP_R*TILE;
   const CHUNK_W = 10, CHUNK_H = 8;
 
   // ───────── CANVASES ─────────
   const canvas = document.getElementById('gameCanvas'),
-        ctx    = canvas.getContext('2d');
-  const off = new OffscreenCanvas(VIEW_W, VIEW_H),
-        octx = off.getContext('2d');
-  const lightCanvas = new OffscreenCanvas(VIEW_W, VIEW_H),
-        lctx        = lightCanvas.getContext('2d');
+        ctx    = canvas.getContext('2d'),
+        off    = document.createElement('canvas'),
+        octx   = off.getContext('2d'),
+        lightC = document.createElement('canvas'),
+        lctx   = lightC.getContext('2d');
+  off.width = lightC.width = VIEW_W; off.height = lightC.height = VIEW_H;
 
   // ───────── STATE ─────────
   let player, ambientNPCs = [], keyNPCs = [], zone, tileset;
-  let keys = {}, dayTime = 0, rainDrops = [], currentZone = 0;
-  let factionRep = 0, repDirty = true;
-  let inVehicle = false, vehicleX = 0;
-  let skillPoints = 0;
+  let keys = {}, t=0, rain=[], currentZone=0;
+  let rep=0, repDirty=true, inVehicle=false, vx=0, skillPts=0;
   const skills = [
     {name:"Wallhack",cost:2,unlocked:false},
     {name:"Double Jump",cost:3,unlocked:false},
     {name:"EMP Burst",cost:5,unlocked:false}
   ];
 
-  // ───────── DIALOGUE DATA ─────────
-  function adjustReputation(a){
-    factionRep = Math.max(-10, Math.min(10, factionRep + a));
-    repDirty = true;
-  }
+  // ───────── DIALOGUE ─────────
+  function adjustRep(a){ rep = Math.min(10,Math.max(-10,rep+a)); repDirty=true; }
   const DIALOGUE = {
-    thug1: { text:`"Viper": Get lost, you corp scum—this alley’s mine, dammit!`, choices:[{text:"(nod)",next:null}] },
-    thug2: { text:`"Razor": Hand over your creds, or I’ll fry your sorry ass!`, choices:[{text:"Run",next:null}] },
-    thug3: { text:`"Blade": Move it, punk, before I gut you!`, choices:[{text:"(shrug)",next:null}] },
-    ally1: { text:`"Echo": I’m covering you, Kai.`, choices:[{text:"Thanks",next:null}] },
-    ally2: { text:`"Byte": Data uplink stable.`, choices:[{text:"Roger",next:null}] },
-    roe:   { text:`"Roe": You’ve crossed my path, stranger.`, choices:[{text:"(step back)",next:null}] },
-    vega:  { text:`"Vega": Let’s crack that firewall together.`, choices:[
-      {text:"Ask Vega about her past", next:"romance", effect:()=>adjustReputation(+1)},
+    thug1:{text:`"Viper": Get lost, you corp scum—this alley’s mine!", choices:[{text:"(nod)",next:null}]},
+    thug2:{text:`"Razor": Hand over your creds, or I’ll fry you!", choices:[{text:"Run",next:null}]},
+    thug3:{text:`"Blade": Move it, punk, before I gut you!", choices:[{text:"(shrug)",next:null}]},
+    ally1:{text:`"Echo": I’m covering you, Kai.", choices:[{text:"Thanks",next:null}]},
+    ally2:{text:`"Byte": Data uplink stable.",choices:[{text:"Roger",next:null}]},
+    roe:  {text:`"Roe": You’ve crossed my path, stranger.",choices:[{text:"(step back)",next:null}]},
+    vega: {text:`"Vega": Let’s crack that firewall together.",choices:[
+      {text:"Ask Vega about her past", next:"romance", effect:()=>adjustRep(+1)},
       {text:"Proceed quietly", next:null}
     ]},
-    romance: { text:`"Vega": I can’t keep lying to you… I’ve grown to care, Kai.`, choices:[
-      {text:"I care too.", next:"romance_accept", effect:()=>adjustReputation(+2)},
-      {text:"This is a mistake.", next:"romance_reject", effect:()=>adjustReputation(-2)}
+    romance:{text:`"Vega": I can’t keep lying to you… I’ve grown to care, Kai.",choices:[
+      {text:"I care too.", next:"romanceA", effect:()=>adjustRep(+2)},
+      {text:"This is a mistake.", next:"romanceR",effect:()=>adjustRep(-2)}
     ]},
-    romance_accept: { text:`"Vega": Then stay with me after this is over…`, choices:[{text:"I will.",next:null}] },
-    romance_reject: { text:`"Vega": So be it. I’ll handle this alone.`, choices:[{text:"Good luck.",next:null}] },
-    civilian: { text:`"Bystander": Ugh, this rain…`, choices:[{text:"Stay safe.",next:null}] }
+    romanceA:{text:`"Vega": Stay with me after…",choices:[{text:"I will.",next:null}]},
+    romanceR:{text:`"Vega": So be it…",choices:[{text:"Good luck.",next:null}]},
+    civilian:{text:`"Bystander": Ugh, this rain…",choices:[{text:"Stay safe.",next:null}]}
   };
 
   // ───────── PORTRAITS ─────────
-  function genPortrait(skin, hair) {
-    const S = 64, cvs = new OffscreenCanvas(S,S), g = cvs.getContext('2d');
-    g.fillStyle = '#111'; g.fillRect(0,0,S,S);
-    g.fillStyle = skin; g.beginPath(); g.arc(S/2,S/3,S/4,0,2*Math.PI); g.fill();
-    g.fillStyle = hair;
-    g.fillRect(S/2-S/4,S/3-S/4-4,S/2,12);
-    g.fillRect(S/2-S/4-2,S/3-S/4,4,8);
-    g.fillRect(S/2+S/4-2,S/3-S/4,4,8);
-    g.fillStyle = '#000';
-    g.fillRect(S/2-10,S/3-2,4,4);
-    g.fillRect(S/2+6,S/3-2,4,4);
+  function makePortrait(skin,hair){
+    const S=64, c=document.createElement('canvas'),g=c.getContext('2d');
+    c.width=c.height=S;
+    g.fillStyle='#111';g.fillRect(0,0,S,S);
+    g.fillStyle=skin;g.beginPath();g.arc(S/2,S/3,S/4,0,2*Math.PI);g.fill();
+    g.fillStyle=hair;g.fillRect(S/2-S/4,S/3-S/4-4,S/2,12);
+    g.fillRect(S/2-S/4-2,S/3-S/4,4,8);g.fillRect(S/2+S/4-2,S/3-S/4,4,8);
+    g.fillStyle='#000';g.fillRect(S/2-10,S/3-2,4,4);g.fillRect(S/2+6,S/3-2,4,4);
     g.fillRect(S/2-6,S/3+8,12,2);
-    return cvs;
+    return c.toDataURL();
   }
   const PORTRAITS = {
-    thug1:   genPortrait('#c68642','#300'),
-    thug2:   genPortrait('#8d5524','#a50'),
-    thug3:   genPortrait('#8d5524','#50a'),
-    ally1:   genPortrait('#ffdbac','#0cf'),
-    ally2:   genPortrait('#ffdbac','#2f2'),
-    roe:     genPortrait('#8d5524','#000'),
-    vega:    genPortrait('#ffdbac','#f0f'),
-    civilian:genPortrait('#c68642','#444'),
-    player:  genPortrait('#ffdbac','#000')
+    thug1:makePortrait('#c68642','#300'),
+    thug2:makePortrait('#8d5524','#a50'),
+    thug3:makePortrait('#8d5524','#50a'),
+    ally1:makePortrait('#ffdbac','#0cf'),
+    ally2:makePortrait('#ffdbac','#2f2'),
+    roe:  makePortrait('#8d5524','#000'),
+    vega: makePortrait('#ffdbac','#f0f'),
+    civilian:makePortrait('#c68642','#444'),
+    player:makePortrait('#ffdbac','#000')
   };
 
   // ───────── AUDIO ─────────
-  const audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  const audioCtx=new (window.AudioContext||window.webkitAudioContext)();
   function playKeyClick(){
-    const osc = audioCtx.createOscillator(), g = audioCtx.createGain();
-    osc.type='square'; osc.frequency.value=800; g.gain.value=0.02;
-    osc.connect(g).connect(audioCtx.destination);
-    osc.start(); osc.stop(audioCtx.currentTime+0.03);
+    const o=audioCtx.createOscillator(),g=audioCtx.createGain();
+    o.type='square';o.frequency.value=800;g.gain.value=0.02;
+    o.connect(g).connect(audioCtx.destination);
+    o.start();o.stop(audioCtx.currentTime+0.03);
   }
 
-  // ───────── POOLS ─────────
-  class Pool {
-    constructor(factory, n=100) {
-      this.free = Array.from({length:n}, factory);
-    }
-    acquire(){ return this.free.pop() || null; }
-    release(obj){ this.free.push(obj); }
-  }
-  const particlePool = new Pool(() => ({x:0,y:0,vx:0,vy:0,alpha:1}), 200);
+  // ───────── POOL ─────────
+  class Pool{constructor(f,n=100){this.free=Array.from({length:n},f);} acquire(){return this.free.pop()||null;} release(o){this.free.push(o);}}
+  const pool=new Pool(()=>({x:0,y:0,vy:0}),300);
 
   // ───────── INPUT ─────────
-  canvas.addEventListener('keydown', e => keys[e.key] = true);
-  canvas.addEventListener('keyup',   e => keys[e.key] = false);
+  canvas.addEventListener('keydown',e=>keys[e.key]=true);
+  canvas.addEventListener('keyup',e=>keys[e.key]=false);
   canvas.focus();
 
-  // ───────── TILEMAP & CHUNKS ─────────
+  // ───────── TILEMAP ─────────
   function genTileset(){
-    const pal = {floor:"#222",wall:"#111",door:"#880",water:"#004",building:"#444"};
-    const f=7, cvs=new OffscreenCanvas(TILE*f,TILE), g=cvs.getContext('2d');
-    ["floor","wall","door"].forEach((t,i)=>{
-      g.fillStyle = pal[t]; g.fillRect(i*TILE,0,TILE,TILE);
-    });
+    const pal={floor:"#222",wall:"#111",door:"#880",water:"#004",building:"#444"};
+    const f=7, c=document.createElement('canvas'),g=c.getContext('2d');
+    c.width=TILE*f; c.height=TILE;
+    ["floor","wall","door"].forEach((t,i)=>{g.fillStyle=pal[t];g.fillRect(i*TILE,0,TILE,TILE);});
     for(let wf=0;wf<2;wf++){
-      const x0=(3+wf)*TILE;
-      g.fillStyle = pal.water; g.fillRect(x0,0,TILE,TILE);
-      g.strokeStyle="rgba(255,255,255,0.5)"; g.lineWidth=2; g.beginPath();
+      const x0=(3+wf)*TILE;g.fillStyle=pal.water;g.fillRect(x0,0,TILE,TILE);
+      g.strokeStyle="rgba(255,255,255,0.5)";g.lineWidth=2;g.beginPath();
       for(let y=-1;y<=TILE;y+=8){
-        g.moveTo(x0-4, y+wf*4);
-        g.quadraticCurveTo(x0+TILE/2, y+4+wf*4, x0+TILE+4, y+wf*4);
+        g.moveTo(x0-4,y+wf*4);
+        g.quadraticCurveTo(x0+TILE/2,y+4+wf*4,x0+TILE+4,y+wf*4);
       }
       g.stroke();
     }
-    const b5 = 5*TILE;
-    g.fillStyle=pal.building; g.fillRect(b5,0,TILE,TILE);
-    g.fillStyle="rgba(200,200,100,0.6)";
-    for(let wy=4;wy<TILE-4;wy+=6)for(let wx=4;wx<TILE-4;wx+=6){
-      g.fillRect(b5+wx,wy,3,3);
-    }
-    const b6 = 6*TILE;
-    g.fillStyle="#666"; g.fillRect(b6,0,TILE,TILE);
-    g.fillStyle="#999"; g.fillRect(b6,TILE/2-2,TILE,4);
-    return cvs;
+    const b5=5*TILE; g.fillStyle=pal.building;g.fillRect(b5,0,TILE,TILE);
+    g.fillStyle="rgba(200,200,100,0.6)";for(let wy=4;wy<TILE-4;wy+=6)for(let wx=4;wx<TILE-4;wx+=6)g.fillRect(b5+wx,wy,3,3);
+    const b6=6*TILE; g.fillStyle="#666";g.fillRect(b6,0,TILE,TILE);
+    g.fillStyle="#999";g.fillRect(b6,TILE/2-2,TILE,4);
+    return c;
   }
   function initZone(){
-    const m = Array(MAP_R).fill().map(()=>Array(MAP_C).fill(0));
-    for(let y=0;y<MAP_R;y++)for(let x=0;x<MAP_C;x++){
-      if(y===0||y===MAP_R-1||x===0||x===MAP_C-1) m[y][x]=1;
-    }
-    m[5][10]=2; for(let yy=8;yy<10;yy++)for(let xx=6;xx<9;xx++) m[yy][xx]=3;
+    const m=Array(MAP_R).fill().map(()=>Array(MAP_C).fill(0));
+    for(let y=0;y<MAP_R;y++)for(let x=0;x<MAP_C;x++)if(y===0||y===MAP_R-1||x===0||x===MAP_C-1)m[y][x]=1;
+    m[5][10]=2;for(let yy=8;yy<10;yy++)for(let xx=6;xx<9;xx++)m[yy][xx]=3;
     for(let b=0;b<12;b++){
       const bw=2+Math.random()*5|0,bh=2+Math.random()*4|0,
             bx=1+Math.random()*(MAP_C-bw-2)|0, by=1+Math.random()*(MAP_R-bh-2)|0;
-      for(let yy=by;yy<by+bh;yy++)for(let xx=bx;xx<bx+bw;xx++){
-        if(m[yy][xx]===0) m[yy][xx]=5;
-      }
+      for(let yy=by;yy<by+bh;yy++)for(let xx=bx;xx<bx+bw;xx++)if(m[yy][xx]===0)m[yy][xx]=5;
     }
-    for(let x=5;x<MAP_C-5;x++) m[20][x]=6;
-    tileset = genTileset();
-    zone = {map:m, tileset};
+    for(let x=5;x<MAP_C-5;x++)m[20][x]=6;
+    tileset=genTileset(); zone={map:m,tileset};
   }
-  function drawChunks(viewX,viewY){
-    for(let cy=0;cy<MAP_R;cy+=CHUNK_H){
-      for(let cx=0;cx<MAP_C;cx+=CHUNK_W){
-        const px=cx*TILE, py=cy*TILE;
-        if(px+CHUNK_W*TILE<viewX||py+CHUNK_H*TILE<viewY||
-           px>viewX+VIEW_W||py>viewY+VIEW_H) continue;
-        for(let y=cy;y<cy+CHUNK_H;y++)for(let x=cx;x<cx+CHUNK_W;x++){
-          const id=zone.map[y][x], fx=(id===3)?3+Math.floor(dayTime/500)%2:id;
-          octx.drawImage(tileset,fx*TILE,0,TILE,TILE,x*TILE,y*TILE,TILE,TILE);
-        }
+  function drawChunks(vx,vy){
+    for(let cy=0;cy<MAP_R;cy+=CHUNK_H)for(let cx=0;cx<MAP_C;cx+=CHUNK_W){
+      const px=cx*TILE,py=cy*TILE;
+      if(px+CHUNK_W*TILE<vx||py+CHUNK_H*TILE<vy||px>vx+VIEW_W||py>vy+VIEW_H)continue;
+      for(let y=cy;y<cy+CHUNK_H;y++)for(let x=cx;x<cx+CHUNK_W;x++){
+        const id=zone.map[y][x],fx=(id===3)?3+Math.floor(t/500)%2:id;
+        octx.drawImage(tileset,fx*TILE,0,TILE,TILE,x*TILE,y*TILE,TILE,TILE);
       }
     }
   }
 
   // ───────── WEATHER ─────────
-  function initWeather(){
-    rainDrops=[];
-    for(let i=0;i<300;i++){
-      const r = particlePool.acquire();
-      r.x = Math.random()*WORLD_W; r.y = Math.random()*WORLD_H;
-      r.vy = 2 + Math.random()*2; r.alpha = 0.2 + Math.random()*0.3;
-      rainDrops.push(r);
-    }
-  }
-  function updateWeather(dt){
-    rainDrops.forEach(r=>{
-      r.y += r.vy*dt/16;
-      if(r.y>WORLD_H){ r.y=0; r.x=Math.random()*WORLD_W; }
-    });
-  }
-  function drawWeather(){
-    octx.save();
-    octx.strokeStyle='rgba(0,200,200,0.2)'; octx.lineWidth=1;
-    rainDrops.forEach(r=>{
-      octx.beginPath(); octx.moveTo(r.x,r.y); octx.lineTo(r.x,r.y+10); octx.stroke();
-    });
-    octx.restore();
-  }
+  function initWeather(){rain=[];for(let i=0;i<300;i++){const r=pool.acquire();r.x=Math.random()*WORLD_W;r.y=Math.random()*WORLD_H;r.vy=2+Math.random()*2;rain.push(r);} }
+  function updateWeather(d){rain.forEach(r=>{r.y+=r.vy*d/16;if(r.y>WORLD_H)r.y=0;});}
+  function drawWeather(){octx.save();octx.strokeStyle='rgba(0,200,200,0.2)';octx.lineWidth=1;rain.forEach(r=>{octx.beginPath();octx.moveTo(r.x,r.y);octx.lineTo(r.x,r.y+10);octx.stroke();});octx.restore();}
 
   // ───────── GOD RAYS ─────────
-  function drawGodRays(){
-    lctx.clearRect(0,0,VIEW_W,VIEW_H);
-    lctx.filter = 'blur(20px)'; lctx.drawImage(off,0,0);
-    octx.save(); octx.globalCompositeOperation = 'lighter'; octx.globalAlpha = 0.3;
-    octx.drawImage(lightCanvas,0,0); octx.restore();
-    lctx.filter = 'none';
-  }
+  function drawGod(){lctx.clearRect(0,0,VIEW_W,VIEW_H);lctx.filter='blur(20px)';lctx.drawImage(off,0,0);octx.save();octx.globalCompositeOperation='lighter';octx.globalAlpha=0.3;octx.drawImage(lightC,0,0);octx.restore();lctx.filter='none';}
 
   // ───────── REFLECTIONS & DOF ─────────
-  function drawReflections(){
-    for(let y=0;y<MAP_R;y++)for(let x=0;x<MAP_C;x++){
-      if(zone.map[y][x]===3){
-        const px=x*TILE, py=y*TILE;
-        octx.save(); octx.globalAlpha=0.2; octx.scale(1,-1);
-        octx.drawImage(off,px,-py-TILE,TILE,TILE,px,-py-TILE*2,TILE,TILE);
-        octx.restore();
-      }
-    }
-  }
-  function applyDOFandMotion(){
-    octx.globalAlpha=0.5; octx.filter='blur(2px)'; octx.drawImage(off,0,0); octx.filter='none';
-  }
+  function drawRefl(){for(let y=0;y<MAP_R;y++)for(let x=0;x<MAP_C;x++)if(zone.map[y][x]===3){const px=x*TILE,py=y*TILE; octx.save();octx.globalAlpha=0.2;octx.scale(1,-1);octx.drawImage(off,px,-py-TILE,TILE,TILE,px,-py-TILE*2,TILE,TILE);octx.restore();}}
+  function applyDOF(){octx.globalAlpha=0.5;octx.filter='blur(2px)';octx.drawImage(off,0,0);octx.filter='none';}
 
   // ───────── NEON GRID ─────────
-  function drawNeonGrid(){
-    octx.save(); octx.strokeStyle='rgba(102,0,255,0.1)'; octx.lineWidth=1;
-    for(let x=0;x<WORLD_W;x+=TILE*5){
-      octx.beginPath(); octx.moveTo(x,0); octx.lineTo(x,WORLD_H); octx.stroke();
-    }
-    for(let y=0;y<WORLD_H;y+=TILE*5){
-      octx.beginPath(); octx.moveTo(0,y); octx.lineTo(WORLD_W,y); octx.stroke();
-    }
-    octx.restore();
-  }
+  function drawGrid(){octx.save();octx.strokeStyle='rgba(102,0,255,0.1)';octx.lineWidth=1;for(let x=0;x<WORLD_W;x+=TILE*5){octx.beginPath();octx.moveTo(x,0);octx.lineTo(x,WORLD_H);octx.stroke();}for(let y=0;y<WORLD_H;y+=TILE*5){octx.beginPath();octx.moveTo(0,y);octx.lineTo(WORLD_W,y);octx.stroke();}octx.restore();}
 
   // ───────── PARALLAX SKYLINE ─────────
-  let cityOffset = 0;
-  function drawParallax(){
-    cityOffset = (cityOffset + 0.1) % VIEW_W;
-    ctx.save(); ctx.translate(-cityOffset,0); ctx.fillStyle='rgba(50,50,70,0.2)';
-    for(let i=0;i<20;i++) ctx.fillRect(i*VIEW_W/20,VIEW_H*0.6,VIEW_W/30,VIEW_H*0.4);
-    ctx.translate(VIEW_W,0);
-    for(let i=0;i<20;i++) ctx.fillRect(i*VIEW_W/20,VIEW_H*0.6,VIEW_W/30,VIEW_H*0.4);
-    ctx.restore();
-  }
+  let city=0; function drawPara(){city=(city+0.1)%VIEW_W;ctx.save();ctx.translate(-city,0);ctx.fillStyle='rgba(50,50,70,0.2)';for(let i=0;i<20;i++)ctx.fillRect(i*VIEW_W/20,VIEW_H*0.6,VIEW_W/30,VIEW_H*0.4);ctx.translate(VIEW_W,0);for(let i=0;i<20;i++)ctx.fillRect(i*VIEW_W/20,VIEW_H*0.6,VIEW_W/30,VIEW_H*0.4);ctx.restore();}
 
   // ───────── CHROMATIC ABERRATION ─────────
-  function drawChromaticAberration(){
-    ctx.globalCompositeOperation='screen';
-    ctx.drawImage(off,2,0,VIEW_W,VIEW_H,0,0,VIEW_W,VIEW_H);
-    ctx.globalCompositeOperation='lighten';
-    ctx.drawImage(off,-2,0,VIEW_W,VIEW_H,0,0,VIEW_W,VIEW_H);
-    ctx.globalCompositeOperation='source-over';
-  }
+  function drawCA(){ctx.globalCompositeOperation='screen';ctx.drawImage(off,2,0,VIEW_W,VIEW_H,0,0,VIEW_W,VIEW_H);ctx.globalCompositeOperation='lighten';ctx.drawImage(off,-2,0,VIEW_W,VIEW_H,0,0,VIEW_W,VIEW_H);ctx.globalCompositeOperation='source-over';}
 
-  // ───────── VEHICLE SEGMENT ─────────
-  function updateVehicle(dt){
-    vehicleX += dt*0.1; if(vehicleX > WORLD_W) inVehicle = false;
-  }
-  function drawVehicle(){
-    octx.clearRect(0,VIEW_H/2,VIEW_W,VIEW_H/2);
-    for(let i=0;i<50;i++){
-      const x = (i*200 - vehicleX*0.5) % VIEW_W;
-      octx.fillStyle='rgba(80,80,120,0.3)'; octx.fillRect(x,VIEW_H/2,180,100);
-    }
-    octx.fillStyle='#f44'; octx.fillRect(VIEW_W/2-16,VIEW_H/2+20,32,16);
-  }
+  // ───────── VEHICLE ─────────
+  function updVeh(d){vx+=d*0.1;if(vx>WORLD_W)inVehicle=false;}
+  function drawVeh(){octx.clearRect(0,VIEW_H/2,VIEW_W,VIEW_H/2);for(let i=0;i<50;i++){const x=(i*200-vx*0.5)%VIEW_W;octx.fillStyle='rgba(80,80,120,0.3)';octx.fillRect(x,VIEW_H/2,180,100);}octx.fillStyle='#f44';octx.fillRect(VIEW_W/2-16,VIEW_H/2+20,32,16);}
 
-  // ───────── FACTION & SKILLS UI ─────────
-  const repEl          = document.getElementById('repMeter'),
-        skillBtn       = document.getElementById('skillTreeBtn'),
-        skillPanel     = document.getElementById('skillPanel'),
-        skillList      = document.getElementById('skillList'),
-        closeSkillBtn  = document.getElementById('closeSkill');
-  skillBtn.onclick = ()=>{
+  // ───────── UI ─────────
+  const repEl=document.getElementById('repMeter'),
+        sBtn=document.getElementById('skillTreeBtn'),
+        sPanel=document.getElementById('skillPanel'),
+        sList=document.getElementById('skillList'),
+        cBtn=document.getElementById('closeSkill');
+  sBtn.onclick=()=>{
     playKeyClick();
-    skillList.innerHTML = skills.map((s,i)=>
+    sList.innerHTML=skills.map((s,i)=>
       `<li>${s.name} (${s.cost}): `+
-      (s.unlocked
-        ? 'Unlocked'
-        : `<button onclick="unlockSkill(${i})" class="choice">Unlock</button>`)
-      + `</li>`
-    ).join('');
-    skillPanel.style.display = 'block';
+      (s.unlocked?'Unlocked':`<button onclick="unlock(${i})" class="choice">Unlock</button>`)
+      +`</li>`).join('');
+    sPanel.style.display='block';
   };
-  closeSkillBtn.onclick = ()=>{ playKeyClick(); skillPanel.style.display='none'; };
-  window.unlockSkill = i => {
-    if(skillPoints >= skills[i].cost && !skills[i].unlocked){
-      skillPoints -= skills[i].cost;
-      skills[i].unlocked = true;
-      playKeyClick();
-      skillBtn.click();
-    }
-  };
-  function updateRepUI(){
-    if(repDirty){
-      repEl.textContent = `Reputation: ${factionRep}`;
-      repDirty = false;
-    }
-  }
+  cBtn.onclick=()=>{playKeyClick();sPanel.style.display='none';};
+  window.unlock=i=>{if(skillPts>=skills[i].cost&&!skills[i].unlocked){skillPts-=skills[i].cost;skills[i].unlocked=true;playKeyClick();sBtn.click();}};
+  function updRep(){if(repDirty){repEl.textContent=`Reputation: ${rep}`;repDirty=false;}}
 
-  // ───────── PATHFINDING ─────────
-  function findPath(grid, start, goal){
-    const key = p=>`${p.x},${p.y}`, h=p=>Math.abs(p.x-goal.x)+Math.abs(p.y-goal.y);
-    let open = new Set([key(start)]), came = {}, gScore = {[key(start)]:0}, fScore = {[key(start)]:h(start)};
-    while(open.size){
-      let curr, best=1e9;
-      for(let k of open) if(fScore[k]<best){best=fScore[k]; curr=k;}
-      const [cx,cy] = curr.split(',').map(Number);
-      if(cx===goal.x && cy===goal.y){
-        let path=[], c=curr;
-        while(c!==key(start)){
-          const [px,py] = c.split(',').map(Number);
-          path.unshift({x:px,y:py}); c=came[c];
-        }
-        return path;
-      }
-      open.delete(curr);
-      [[1,0],[-1,0],[0,1],[0,-1]].forEach(d=>{
-        const nx=cx+d[0], ny=cy+d[1];
-        if(nx<0||ny<0||nx>=MAP_C||ny>=MAP_R) return;
-        const cell=grid[ny][nx];
-        if(cell>=1 && cell<=5) return;
-        const nk=`${nx},${ny}`, tg=gScore[curr]+1;
-        if(tg < (gScore[nk]||1e9)){
-          came[nk]=curr; gScore[nk]=tg; fScore[nk]=tg+h({x:nx,y:ny}); open.add(nk);
-        }
-      });
-    }
-    return [];
-  }
+  // ───────── PATHFIND ─────────
+  function findPath(g,s,go){const key=p=>p.x+','+p.y,h=p=>Math.abs(p.x-go.x)+Math.abs(p.y-go.y);let open=new Set([key(s)]),came={},gS={[key(s)]:0},fS={[key(s)]:h(s)};while(open.size){let cur,b=1e9;for(let k of open)if(fS[k]<b){b=fS[k];cur=k;}const [cx,cy]=cur.split(',').map(Number);if(cx===go.x&&cy===go.y){let path=[],c=cur;while(c!==key(s)){const [px,py]=c.split(',').map(Number);path.unshift({x:px,y:py});c=came[c];}return path;}open.delete(cur);[[1,0],[-1,0],[0,1],[0,-1]].forEach(d=>{const nx=cx+d[0],ny=cy+d[1];if(nx<0||ny<0||nx>=MAP_C||ny>=MAP_R)return;const cell=g[ny][nx];if(cell>=1&&cell<=5)return;const nk=`${nx},${ny}`,tg=gS[cur]+1; if(tg<(gS[nk]||1e9)){came[nk]=cur;gS[nk]=tg;fS[nk]=tg+h({x:nx,y:ny});open.add(nk);}});}return[];}
 
-  // ───────── ENTITIES & INPUT ─────────
-  async function initEntities(){
-    player = { x:5*TILE, y:5*TILE, sheet: await genSprite('#f44','#000','#ffdbac') };
-
-    ambientNPCs = [];
-    const skins = ['#ffdbac','#c68642','#8d5524'], hairs=['#222','#444','#666'];
-    for(let i=0;i<8;i++){
-      ambientNPCs.push({
-        x:(2+Math.random()*(MAP_C-4)|0)*TILE,
-        y:(2+Math.random()*(MAP_R-4)|0)*TILE,
-        sheet: await genSprite('#888', hairs[i%3], skins[i%3]),
-        timer:0, dir:0
-      });
-    }
-
-    keyNPCs = [];
-    const configs = [
+  // ───────── ENTITIES ─────────
+  async function initEnt(){
+    player = {x:5*TILE,y:5*TILE,sheet:await genSprite('#f44','#000','#ffdbac')};
+    ambientNPCs=[];const skins=['#ffdbac','#c68642','#8d5524'],hairs=['#222','#444','#666'];
+    for(let i=0;i<8;i++){ambientNPCs.push({x:(2+Math.random()*(MAP_C-4)|0)*TILE,y:(2+Math.random()*(MAP_R-4)|0)*TILE,sheet:await genSprite('#888',hairs[i%3],skins[i%3]),timer:0,dir:0});}
+    keyNPCs=[];const cfg=[
       {id:'thug1',pts:[{x:10,y:6},{x:20,y:6},{x:20,y:12},{x:10,y:12}],col:'#d22',hair:'#300',skin:'#c68642'},
       {id:'thug2',pts:[{x:12,y:8},{x:30,y:8},{x:30,y:16},{x:12,y:16}],col:'#fa0',hair:'#a50',skin:'#8d5524'},
       {id:'thug3',pts:[{x:8,y:10},{x:40,y:10},{x:40,y:20},{x:8,y:20}],col:'#a2f',hair:'#50a',skin:'#8d5524'},
@@ -412,207 +246,117 @@
       {id:'roe',pts:[{x:22,y:5},{x:35,y:5},{x:35,y:10},{x:22,y:10}],col:'#a2f',hair:'#000',skin:'#8d5524'},
       {id:'vega',pts:[{x:8,y:14},{x:28,y:14}],col:'#0cf',hair:'#f0f',skin:'#ffdbac'}
     ];
-    for(const c of configs){
-      keyNPCs.push({
-        id: c.id,
-        path: c.pts,
-        idx: 0,
-        movePath: [],
-        x: c.pts[0].x * TILE,
-        y: c.pts[0].y * TILE,
-        sheet: await genSprite(c.col, c.hair, c.skin)
-      });
+    for(const c of cfg){keyNPCs.push({id:c.id,path:c.pts,idx:0,movePath:[],x:c.pts[0].x*TILE,y:c.pts[0].y*TILE,sheet:await genSprite(c.col,c.hair,c.skin)});}
+  }
+
+  function updateAmb(d){ambientNPCs.forEach(n=>{n.timer-=d;if(n.timer<=0){n.timer=1e3+Math.random()*2e3;n.dir=Math.random()*4|0;}const s=30*d/1e3;if(n.dir===0)n.y-=s;if(n.dir===1)n.x+=s;if(n.dir===2)n.y+=s;if(n.dir===3)n.x-=s;});}
+  function updateKey(d){keyNPCs.forEach(n=>{if(!n.movePath.length){const tgt=n.path[n.idx];n.movePath=findPath(zone.map,{x:n.x/TILE|0,y:n.y/TILE|0},tgt);n.idx=(n.idx+1)%n.path.length;}if(n.movePath.length){const t=n.movePath.shift();n.x=t.x*TILE; n.y=t.y*TILE;}});}
+  function updateInp(d){const s=150*d/1e3; if(keys['ArrowUp'])player.y-=s; if(keys['ArrowDown'])player.y+=s; if(keys['ArrowLeft'])player.x-=s; if(keys['ArrowRight'])player.x+=s; if(keys['e']){[...ambientNPCs,...keyNPCs].forEach(n=>{if(Math.hypot(player.x-n.x,player.y-n.y)<TILE){showDialogue(n.id||'civilian');keys['e']=false;}});} }
+
+  // ───────── SPRITE GEN ─────────
+  async function genSprite(body,hair,skin){
+    const dirs=8,frm=4,s=TILE;
+    const c=document.createElement('canvas'),g=c.getContext('2d');
+    c.width=s*frm; c.height=s*dirs;
+    for(let d=0;d<dirs;d++)for(let f=0;f<frm;f++){
+      const x0=f*s,y0=d*s,o=(f%2)?2:-2;
+      g.fillStyle=body;g.fillRect(x0+6,y0+8,s-12,s-16);
+      g.fillStyle=skin;g.fillRect(x0+10,y0+4,s-20,s-16);
+      g.fillStyle=hair;g.fillRect(x0+8,y0+2,s-16,4);
+      g.fillRect(x0+6,y0+2,4,8);g.fillRect(x0+s-10,y0+2,4,8);
+      g.fillStyle=body;
+      g.fillRect(x0+8+Math.cos(d/dirs*2*Math.PI)*2,y0+24+o+Math.sin(d/dirs*2*Math.PI)*2,4,8);
+      g.fillRect(x0+20+Math.cos((d+4)/dirs*2*Math.PI)*2,y0+24-o+Math.sin((d+4)/dirs*2*Math.PI)*2,4,8);
     }
-  }
-
-  function updateAmbient(dt){
-    ambientNPCs.forEach(n=>{
-      n.timer -= dt;
-      if(n.timer <= 0){
-        n.timer = 1000 + Math.random()*2000;
-        n.dir = Math.random()*4|0;
-      }
-      const s = 30 * dt/1000;
-      if(n.dir === 0) n.y -= s;
-      if(n.dir === 1) n.x += s;
-      if(n.dir === 2) n.y += s;
-      if(n.dir === 3) n.x -= s;
-    });
-  }
-
-  function updateKey(dt){
-    keyNPCs.forEach(n=>{
-      if(n.movePath.length === 0){
-        const tgt = n.path[n.idx];
-        n.movePath = findPath(zone.map, {x:n.x/TILE|0, y:n.y/TILE|0}, tgt);
-        n.idx = (n.idx + 1) % n.path.length;
-      }
-      if(n.movePath.length){
-        const t = n.movePath.shift();
-        n.x = t.x * TILE; n.y = t.y * TILE;
-      }
-    });
-  }
-
-  function updateInput(dt){
-    const s = 150 * dt/1000;
-    if(keys['ArrowUp'])    player.y -= s;
-    if(keys['ArrowDown'])  player.y += s;
-    if(keys['ArrowLeft'])  player.x -= s;
-    if(keys['ArrowRight']) player.x += s;
-    if(keys['e']){
-      [...ambientNPCs, ...keyNPCs].forEach(n=>{
-        if(Math.hypot(player.x-n.x, player.y-n.y) < TILE){
-          showDialogue(n.id || 'civilian');
-          keys['e'] = false;
-        }
-      });
-    }
-  }
-
-  // ───────── GENERATED SPRITES ─────────
-  async function genSprite(body, hair, skin){
-    const dirs=8, frm=4, s=TILE;
-    const cvs = new OffscreenCanvas(s*frm, s*dirs), g = cvs.getContext('2d');
-    for(let d=0; d<dirs; d++){
-      for(let f=0; f<frm; f++){
-        const x0=f*s, y0=d*s, o=(f%2)?2:-2;
-        g.fillStyle = body; g.fillRect(x0+6, y0+8, s-12, s-16);
-        g.fillStyle = skin; g.fillRect(x0+10, y0+4, s-20, s-16);
-        g.fillStyle = hair; g.fillRect(x0+8, y0+2, s-16,4);
-        g.fillRect(x0+6, y0+2,4,8);
-        g.fillRect(x0+s-10,y0+2,4,8);
-        g.fillStyle = body;
-        g.fillRect(x0+8  + Math.cos(d/dirs*2*Math.PI)*2,
-                   y0+24 + o + Math.sin(d/dirs*2*Math.PI)*2,
-                   4,8);
-        g.fillRect(x0+20 + Math.cos((d+4)/dirs*2*Math.PI)*2,
-                   y0+24 - o + Math.sin((d+4)/dirs*2*Math.PI)*2,
-                   4,8);
-      }
-    }
-    const blob = await cvs.convertToBlob();
-    const url  = URL.createObjectURL(blob);
-    const img  = new Image();
-    img.src = url;
-    await new Promise(r => img.onload=r);
-    return img;
+    return new Promise(r=>{const img=new Image();img.onload=r;img.src=c.toDataURL();});
   }
 
   // ───────── DIALOGUE UI ─────────
-  const dlgP     = document.getElementById('dialoguePanel'),
-        dlgT     = document.getElementById('dialogueText'),
-        dlgL     = document.getElementById('choiceList'),
-        portrait = document.getElementById('portrait');
+  const dlgP=document.getElementById('dialoguePanel'),
+        dlgT=document.getElementById('dialogueText'),
+        dlgL=document.getElementById('choiceList'),
+        portraitEl=document.getElementById('portrait');
 
-  function showDialogue(id) {
-    const data = DIALOGUE[id] || DIALOGUE['civilian'];
-    // portrait
-    portrait.src = PORTRAITS[id] instanceof OffscreenCanvas
-      ? PORTRAITS[id].transferToImageBitmap()
-      : '';
-    dlgT.innerText = data.text;
-    dlgL.innerHTML = '';
-    data.choices.forEach((choice, idx) => {
-      const btn = document.createElement('div');
-      btn.className = 'choice';
-      btn.innerText = `${idx+1}. ${choice.text}`;
-      btn.onclick = () => {
+  function showDialogue(id){
+    const data=DIALOGUE[id]||DIALOGUE['civilian'];
+    portraitEl.src=PORTRAITS[id]||PORTRAITS['civilian'];
+    dlgT.innerText=data.text;
+    dlgL.innerHTML='';
+    data.choices.forEach((c,i)=>{
+      const btn=document.createElement('div');
+      btn.className='choice';
+      btn.innerText=`${i+1}. ${c.text}`;
+      btn.onclick=()=>{
         playKeyClick();
-        dlgP.style.display = 'none';
-        if(choice.effect) choice.effect();
-        if(choice.next) showDialogue(choice.next);
+        dlgP.style.display='none';
+        if(c.effect) c.effect();
+        if(c.next) showDialogue(c.next);
       };
       dlgL.appendChild(btn);
     });
-    dlgP.style.display = 'block';
+    dlgP.style.display='block';
   }
 
   // ───────── MAIN LOOP ─────────
-  let glitchTimer = 0;
-  function applyGlitch(dt){
-    glitchTimer -= dt;
-    if(glitchTimer <= 0){
-      glitchTimer = 3000 + Math.random()*5000;
-      const offset = (Math.random()*6|0) - 3;
-      canvas.style.transform = `translateX(${offset}px)`;
-      setTimeout(()=> canvas.style.transform = '', 50);
+  let glitch=0;
+  function applyGlitch(d){
+    glitch-=d;
+    if(glitch<=0){
+      glitch=3e3+Math.random()*5e3;
+      const off=(Math.random()*6|0)-3;
+      canvas.style.transform=`translateX(${off}px)`;
+      setTimeout(()=>canvas.style.transform='',50);
     }
   }
 
   function mainLoop(ts){
-    dayTime = ts;
-    const dt = 16;
-    if(inVehicle){
-      updateVehicle(dt);
-    } else {
-      updateAmbient(dt);
-      updateKey(dt);
-      updateInput(dt);
-    }
-    updateWeather(dt);
+    t=ts;
+    const d=16;
+    if(inVehicle) updVeh(d);
+    else { updateAmb(d); updateKey(d); updateInp(d); }
+    updateWeather(d);
 
-    // camera
-    const cx = Math.min(0, Math.max(VIEW_W/2 - player.x, VIEW_W - WORLD_W));
-    const cy = Math.min(0, Math.max(VIEW_H/2 - player.y, VIEW_H - WORLD_H));
+    const cx=Math.min(0,Math.max(VIEW_W/2-player.x,VIEW_W-WORLD_W));
+    const cy=Math.min(0,Math.max(VIEW_H/2-player.y,VIEW_H-WORLD_H));
 
-    // draw
-    drawParallax();
-    octx.setTransform(1,0,0,1, cx, cy);
+    drawPara();
+    octx.setTransform(1,0,0,1,cx,cy);
     octx.clearRect(0,0,VIEW_W,VIEW_H);
-    drawNeonGrid();
-    drawChunks(-cx, -cy);
+    drawGrid();
+    drawChunks(-cx,-cy);
     drawWeather();
-    if(currentZone===0) drawGodRays();
-    drawReflections();
-    applyDOFandMotion();
+    if(currentZone===0) drawGod();
+    drawRefl();
+    applyDOF();
 
-    if(inVehicle){
-      drawVehicle();
-    } else {
-      // shadows
-      octx.save();
-      octx.globalCompositeOperation='destination-over';
-      octx.fillStyle='rgba(0,0,0,0.5)';
-      [...ambientNPCs, ...keyNPCs, {x:player.x,y:player.y}].forEach(e=>{
-        octx.beginPath();
-        octx.ellipse(e.x, e.y+TILE/2, TILE/2, TILE/4, 0, 0, 2*Math.PI);
-        octx.fill();
+    if(inVehicle) drawVeh();
+    else {
+      octx.save();octx.globalCompositeOperation='destination-over';octx.fillStyle='rgba(0,0,0,0.5)';
+      [...ambientNPCs,...keyNPCs,{x:player.x,y:player.y}].forEach(e=>{
+        octx.beginPath();octx.ellipse(e.x,e.y+TILE/2,TILE/2,TILE/4,0,0,2*Math.PI);octx.fill();
       });
       octx.restore();
-      // sprites
-      ambientNPCs.forEach(n=>{
-        const f = Math.floor(ts/200)%4;
-        octx.drawImage(n.sheet, f*TILE,0,TILE,TILE, n.x-TILE/2, n.y-TILE/2, TILE,TILE);
-      });
-      keyNPCs.forEach(n=>{
-        const f = Math.floor(ts/200)%4;
-        octx.drawImage(n.sheet, f*TILE,0,TILE,TILE, n.x-TILE/2, n.y-TILE/2, TILE,TILE);
-      });
-      const pf = Math.floor(ts/150)%4;
-      octx.drawImage(player.sheet, pf*TILE,0,TILE,TILE, player.x-TILE/2, player.y-TILE/2, TILE,TILE);
+      ambientNPCs.forEach(n=>{const f=Math.floor(ts/200)%4;octx.drawImage(n.sheet,f*TILE,0,TILE,TILE,n.x-TILE/2,n.y-TILE/2,TILE,TILE);});
+      keyNPCs.forEach(n=>{const f=Math.floor(ts/200)%4;octx.drawImage(n.sheet,f*TILE,0,TILE,TILE,n.x-TILE/2,n.y-TILE/2,TILE,TILE);});
+      const pf=Math.floor(ts/150)%4;octx.drawImage(player.sheet,pf*TILE,0,TILE,TILE,player.x-TILE/2,player.y-TILE/2,TILE,TILE);
     }
 
-    // bloom & chromatic
     ctx.clearRect(0,0,VIEW_W,VIEW_H);
-    ctx.filter='blur(6px)'; ctx.drawImage(off,0,0);
-    ctx.filter='none'; drawChromaticAberration();
+    ctx.filter='blur(6px)';ctx.drawImage(off,0,0);
+    ctx.filter='none';drawCA();
 
-    updateRepUI();
-    applyGlitch(dt);
+    if(repDirty){document.getElementById('repMeter').textContent=`Reputation: ${rep}`;repDirty=false;}
+    applyGlitch(d);
 
     requestAnimationFrame(mainLoop);
   }
 
   // ───────── BOOTSTRAP ─────────
-  function initAll(){
-    initZone();
-    initEntities().then(()=>{
-      initWeather();
-      requestAnimationFrame(mainLoop);
-    });
-  }
-  initAll();
+  initZone();
+  initEntities().then(()=>{
+    initWeather();
+    requestAnimationFrame(mainLoop);
+  });
 
 })();
 </script>
