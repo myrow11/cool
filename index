@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>Full 2D RPG Engine</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; }
+    #gameContainer { position:relative; width:512px; height:384px; margin:0 auto; overflow:hidden; }
+    canvas { display:block; }
+    /* UI overlays */
+    #battleUI, #dialogueBox, #questLog {
+      position:absolute; top:0; left:0; width:100%; height:100%; 
+      display:none; pointer-events:none; 
+      font-family:Arial,sans-serif; color:#fff;
+    }
+    #battleUI { background:rgba(0,0,0,0.8); display:flex; align-items:center; justify-content:center; }
+    #battleMenu { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); }
+    #dialogueBox {
+      bottom:20px; left:50%; transform:translateX(-50%); width:70%; 
+      background:rgba(0,0,0,0.8); padding:12px; border-radius:8px; pointer-events:auto;
+    }
+    #questLog {
+      top:20px; right:20px; width:200px; max-height:70%; 
+      background:rgba(0,0,0,0.8); padding:12px; border-radius:8px; overflow-y:auto; pointer-events:auto;
+    }
+    #fadeOverlay {
+      position:absolute; top:0; left:0; width:100%; height:100%;
+      background:#000; opacity:0; pointer-events:none;
+      transition:opacity 500ms ease;
+    }
+  </style>
+</head>
+<body>
+  <div id="gameContainer">
+    <canvas id="gameCanvas" width="512" height="384"></canvas>
+    <div id="fadeOverlay"></div>
+    <!-- Battle UI -->
+    <div id="battleUI">
+      <canvas id="battleCanvas" width="512" height="384" style="background:#222;"></canvas>
+      <div id="battleMenu">
+        <ul id="menuOptions" style="list-style:none; padding:0; margin:0; color:#fff;">
+          <li>▶ Attack</li><li>   Defend</li><li>   Item</li>
+        </ul>
+      </div>
+    </div>
+    <!-- Dialogue Box -->
+    <div id="dialogueBox">
+      <p id="dialogueText" style="margin:0 0 8px;"></p>
+      <ul id="choiceList" style="list-style:none; padding:0; margin:0;"></ul>
+    </div>
+    <!-- Quest Log -->
+    <div id="questLog">
+      <h3 style="margin:0 0 8px;">Quest Log</h3>
+      <ul id="questList" style="list-style:none; padding:0; margin:0;"></ul>
+    </div>
+  </div>
+
+  <script>
+  // ─────────── CONFIG ───────────
+  const TRANSITION_TYPE     = 'slide';      // 'fade' or 'slide'
+  const TRANSITION_DURATION = 500;          // ms
+  const TILE_SIZE           = 32;
+  const FPS                 = 60;
+  const STEP_MS             = 1000 / FPS;
+
+  // Tiled JSON map sources
+  const MAP_SOURCES = {
+    townSquare:      'maps/townSquare.json',
+    dungeonEntrance: 'maps/dungeonEntrance.json',
+    shop:            'maps/shop.json'
+  };
+
+  // Door triggers per room: "tx,ty" → { to, spawn:{x,y} }
+  const DOOR_TRIGGERS = {
+    townSquare: {
+      '4,2': { to:'dungeonEntrance', spawn:{x: TILE_SIZE*1.5, y: TILE_SIZE*1.5} },
+      '10,2':{ to:'shop',            spawn:{x: TILE_SIZE*2.5, y: TILE_SIZE*3.5} }
+    },
+    dungeonEntrance: {
+      '1,1': { to:'townSquare', spawn:{x:TILE_SIZE*4.5, y:TILE_SIZE*2.5} }
+    },
+    shop: {
+      '0,5': { to:'townSquare', spawn:{x:TILE_SIZE*10.5,y:TILE_SIZE*2.5} }
+    }
+  };
+
+  // Animated tiles config: name→{id,frames,duration}
+  const ANIMATED_TILES = {
+    water: { id:4, frames:4, duration:800 },
+    lava:  { id:5, frames:2, duration:1200 }
+  };
+
+  // Dialogue data
+  const DIALOGUES = {
+    elder: {
+      start: { text:"Greetings, hero! Will you help us find the lost Gem of Dawn?", choices:[
+        { text:"I will help.", next:"accept" },
+        { text:"No thanks.",  next:"decline" }
+      ]},
+      accept: { text:"Thank you! Head to the Dark Cave at the edge of town.", choices:[
+        { text:"On my way!", next:null }
+      ]},
+      decline:{ text:"Very well. Safe travels.", choices:[] }
+    }
+  };
+
+  // Quests
+  const QUESTS = {
+    findGem: {
+      title:"Find the Gem of Dawn", status:"inactive",
+      objectives:[{id:"gemLocation",x:12,y:8,description:"Locate the Gem in the Dark Cave",completed:false}]
+    }
+  };
+
+
+  // ─────────── PRELOADER ───────────
+  class Preloader {
+    constructor() { this.assets = {}; }
+    loadImage(key, src) {
+      return new Promise(res => {
+        const img = new Image();
+        img.onload = ()=>{ this.assets[key]=img; res(); };
+        img.src = src;
+      });
+    }
+    loadAudio(key, src, loop=true) {
+      const a = new Audio(src); a.loop=loop; a.volume=0;
+      this.assets[key]=a;
+      return Promise.resolve();
+    }
+    loadJSON(key, src) {
+      return fetch(src).then(r=>r.json()).then(json=>this.assets[key]=json);
+    }
+    async loadAll(list) {
+      const promises = list.map(item=>{
+        if (item.type==='image') return this.loadImage(item.key,item.src);
+        if (item.type==='audio') return this.loadAudio(item.key,item.src,item.loop);
+        if (item.type==='json') return this.loadJSON(item.key,item.src);
+      });
+      await Promise.all(promises);
+    }
+  }
+
+
+  // ─────────── MAP & COLLISION ───────────
+  const MAPS = {};
+  function parseTiled(json) {
+    const layer = json.layers.find(l=>Array.isArray(l.data));
+    const tiles2d = [];
+    for (let y=0;y<json.height;y++){
+      tiles2d[y]=[];
+      for (let x=0;x<json.width;x++){
+        tiles2d[y][x]=layer.data[y*json.width+x]-1;
+      }
+    }
+    return {width:json.width,height:json.height,tiles:tiles2d};
+  }
+
+  class MapLoader {
+    constructor(tileSize,ctx,tileset,blockedIds={},doorTriggers={}) {
+      this.tileSize=tileSize;this.ctx=ctx;this.tileset=tileset;
+      this.blockedIds=blockedIds;this.doorTriggers=doorTriggers;
+    }
+    drawMap(mapData,roomName) {
+      this.currentMap=mapData; this.currentRoom=roomName;
+      for (let y=0;y<mapData.height;y++)for(let x=0;x<mapData.width;x++){
+        const id=mapData.tiles[y][x],sx=id*this.tileSize;
+        this.ctx.drawImage(this.tileset,sx,0,this.tileSize,this.tileSize,
+                           x*this.tileSize,y*this.tileSize,
+                           this.tileSize,this.tileSize);
+      }
+    }
+    getTileIdAt(px,py){
+      const tx=Math.floor(px/this.tileSize),ty=Math.floor(py/this.tileSize);
+      if(!this.currentMap||tx<0||ty<0||tx>=this.currentMap.width||ty>=this.currentMap.height)
+        return null;
+      return this.currentMap.tiles[ty][tx];
+    }
+    isBlockedAt(px,py){
+      const id=this.getTileIdAt(px,py);return id!=null&&!!this.blockedIds[id];
+    }
+    getTriggerAt(px,py){
+      const tx=Math.floor(px/this.tileSize),ty=Math.floor(py/this.tileSize),
+            key=`${tx},${ty}`;
+      return (this.doorTriggers[this.currentRoom]||{})[key]||null;
+    }
+  }
+
+
+  // ─────────── TRANSITIONS ───────────
+  const fadeDiv      = document.getElementById('fadeOverlay');
+  const containerDiv = document.getElementById('gameContainer');
+  fadeDiv.style.transition      = `opacity ${TRANSITION_DURATION}ms ease`;
+  containerDiv.style.transition = `transform ${TRANSITION_DURATION}ms ease`;
+
+  function fadeOut(){return new Promise(res=>{
+    fadeDiv.style.opacity=1;
+    fadeDiv.addEventListener('transitionend',function h(){
+      fadeDiv.removeEventListener('transitionend',h);res();
+    });
+  });}
+  function fadeIn(){return new Promise(res=>{
+    fadeDiv.style.opacity=0;
+    fadeDiv.addEventListener('transitionend',function h(){
+      fadeDiv.removeEventListener('transitionend',h);res();
+    });
+  });}
+  function slideOut(){return new Promise(res=>{
+    containerDiv.style.transform='translateX(-100%)';
+    containerDiv.addEventListener('transitionend',function h(){
+      containerDiv.removeEventListener('transitionend',h);res();
+    });
+  });}
+  function slideIn(){return new Promise(res=>{
+    containerDiv.style.transform='translateX(0)';
+    containerDiv.addEventListener('transitionend',function h(){
+      containerDiv.removeEventListener('transitionend',h);res();
+    });
+  });}
+
+
+  // ─────────── PATHFINDING & NPCs ───────────
+  class Pathfinder {
+    constructor(mapData,blockedIds){
+      this.width=mapData.width;this.height=mapData.height;
+      this.tiles=mapData.tiles;this.blockedIds=blockedIds;
+    }
+    findPath(start,end){
+      const ser=o=>`${o.x},${o.y}`;
+      const inB=o=>o.x>=0&&o.y>=0&&o.x<this.width&&o.y<this.height;
+      const walk=o=>{const id=this.tiles[o.y][o.x];return id!=null&&!this.blockedIds[id];};
+      const neigh=o=>[{x:o.x+1,y:o.y},{x:o.x-1,y:o.y},{x:o.x,y:o.y+1},{x:o.x,y:o.y-1}]
+        .filter(inB).filter(walk);
+      const h=o=>Math.abs(o.x-end.x)+Math.abs(o.y-end.y);
+      let open=new Set([ser(start)]),came={},gS={[ser(start)]:0},fS={[ser(start)]:h(start)};
+      while(open.size){
+        let curKey=null,curF=Infinity;
+        for(let k of open)if((fS[k]||Infinity)<curF){curF=fS[k];curKey=k;}
+        const [cx,cy]=curKey.split(',').map(Number),cur={x:cx,y:cy};
+        if(cx===end.x&&cy===end.y){
+          const path=[];let k=curKey;
+          while(k!==ser(start)){const [px,py]=k.split(',').map(Number);path.push({x:px,y:py});k=came[k];}
+          return path.reverse();
+        }
+        open.delete(curKey);
+        for(let n of neigh(cur)){
+          const nk=ser(n),tg=gS[curKey]+1;
+          if(tg<(gS[nk]||Infinity)){
+            came[nk]=curKey;gS[nk]=tg;fS[nk]=tg+h(n);open.add(nk);
+          }
+        }
+      }
+      return [];
+    }
+  }
+
+  class NPC {
+    constructor(name,startTile,color='gold'){
+      this.name=name;this.tileX=startTile.x;this.tileY=startTile.y;
+      this.color=color;this.path=[];this.targetTile=null;
+    }
+    chooseTarget(mapData){
+      this.targetTile={x:Math.floor(Math.random()*mapData.width),
+                       y:Math.floor(Math.random()*mapData.height)};
+    }
+    update(mapData,blockedIds){
+      if(!this.path.length){
+        this.chooseTarget(mapData);
+        this.path=new Pathfinder(mapData,blockedIds)
+          .findPath({x:this.tileX,y:this.tileY},this.targetTile);
+      }
+      if(this.path.length){
+        const nxt=this.path.shift();
+        this.tileX=nxt.x;this.tileY=nxt.y;
+      }
+    }
+    draw(ctx,tileSize){
+      ctx.fillStyle=this.color;
+      ctx.fillRect(this.tileX*tileSize+tileSize*0.1,
+                   this.tileY*tileSize+tileSize*0.1,
+                   tileSize*0.8,tileSize*0.8);
+    }
+  }
+
+
+  // ─────────── BATTLE SYSTEM ───────────
+  class BattleManager {
+    constructor(){
+      this.player={name:'Hero',hp:100,atk:20,def:5};
+      this.enemy=null;this.state='idle';this.menuOptions=['Attack','Defend','Item'];this.selIndex=0;
+      this.ui=document.getElementById('battleUI');
+      this.canvas=document.getElementById('battleCanvas');
+      this.ctx=this.canvas.getContext('2d');
+      this.menuEl=document.getElementById('menuOptions');
+      this._onKey=this._onKey.bind(this);
+    }
+    start(enemyData){
+      this.enemy={...enemyData};this.state='playerTurn';this.selIndex=0;
+      this.ui.style.display='flex';this._updateMenu();this._render();
+      window.addEventListener('keydown',this._onKey);
+    }
+    _end(){
+      window.removeEventListener('keydown',this._onKey);
+      this.ui.style.display='none';
+      audio.playSFX('audio/battle-theme.mp3',0,0.3); // victory tune stub
+    }
+    _updateMenu(){
+      this.menuEl.querySelectorAll('li').forEach((li,i)=>{
+        li.textContent=(i===this.selIndex?'▶ ':'   ')+this.menuOptions[i];
+      });
+    }
+    _onKey(e){
+      if(this.state!=='playerTurn')return;
+      if(e.key==='ArrowUp'){this.selIndex=(this.selIndex+3-1)%3;this._updateMenu();}
+      else if(e.key==='ArrowDown'){this.selIndex=(this.selIndex+1)%3;this._updateMenu();}
+      else if(e.key==='Enter'){this._playerAction(this.menuOptions[this.selIndex]);}
+    }
+    _playerAction(choice){
+      if(choice==='Attack'){
+        const dmg=Math.max(this.player.atk-this.enemy.def,1);
+        this.enemy.hp-=dmg;this._log(`You hit ${this.enemy.name} for ${dmg}!`);
+      } else if(choice==='Defend'){
+        this.player.def*=2;this._log('You brace yourself!');
+      } else if(choice==='Item'){
+        this.player.hp=Math.min(this.player.hp+30,100);this._log('You used a potion (+30 HP)');
+      }
+      this.state='enemyTurn';this._render();
+      setTimeout(()=>this._enemyTurn(),800);
+    }
+    _enemyTurn(){
+      if(this.enemy.hp<=0){this.state='victory';this._render();return setTimeout(()=>this._end(),1000);}
+      const dmg=Math.max(this.enemy.atk-this.player.def,1);
+      this.player.hp-=dmg;this._log(`${this.enemy.name} hits you for ${dmg}!`);
+      this.player.def/=(this.menuOptions[this.selIndex]==='Defend'?2:1);
+      this.state=this.player.hp<=0?'defeat':'playerTurn';this._render();
+      if(this.state!=='playerTurn')setTimeout(()=>this._end(),1000);
+    }
+    _log(msg){ console.log(msg); }
+    _render(){
+      const ctx=this.ctx;ctx.clearRect(0,0,512,384);
+      // enemy
+      ctx.fillStyle='darkred'; ctx.fillRect(300,100,128,128);
+      ctx.fillStyle='#fff'; ctx.fillText(`${this.enemy.name}`,300,90);
+      ctx.fillText(`HP: ${this.enemy.hp}`,300,250);
+      // player
+      ctx.fillStyle='crimson'; ctx.fillRect(80,200,128,128);
+      ctx.fillStyle='#fff'; ctx.fillText(`HP: ${this.player.hp}`,80,360);
+    }
+  }
+  const bm=new BattleManager();
+  window.addEventListener('keydown',e=>{
+    if(e.key.toLowerCase()==='b'&&bm.state==='idle'){
+      audio.playSFX('audio/battle-start.mp3',0,0.6);
+      bm.start({name:'Goblin',hp:40,atk:10,def:2});
+    }
+  });
+
+
+  // ─────────── DIALOGUE & QUEST ───────────
+  class DialogueManager {
+    constructor(){
+      this.dialogues=DIALOGUES;
+      this.box=document.getElementById('dialogueBox');
+      this.textEl=document.getElementById('dialogueText');
+      this.choicesEl=document.getElementById('choiceList');
+      this.onKey=this._onKey.bind(this);
+    }
+    start(npcName){
+      this.key=npcName.toLowerCase();this.node='start';
+      this.box.style.display='block';this._render();
+      window.addEventListener('keydown',this.onKey);
+    }
+    _render(){
+      const node=this.dialogues[this.key][this.node];
+      this.textEl.textContent=node.text;
+      this.choicesEl.innerHTML='';
+      node.choices.forEach((c,i)=>{
+        const li=document.createElement('li');
+        li.textContent=`${i+1}. ${c.text}`;this.choicesEl.appendChild(li);
+      });
+    }
+    _onKey(e){
+      const node=this.dialogues[this.key][this.node];
+      const idx=parseInt(e.key)-1;
+      if(!isNaN(idx)&&node.choices[idx]){
+        const next=node.choices[idx].next;
+        window.removeEventListener('keydown',this.onKey);
+        if(this.key==='elder'&&next==='accept')questManager.activate('findGem');
+        if(next){ this.node=next; this._render(); window.addEventListener('keydown',this.onKey);}
+        else this.box.style.display='none';
+      }
+    }
+  }
+  const dialogueManager=new DialogueManager();
+
+  class QuestManager {
+    constructor(quests){
+      this.quests=quests;
+      this.logBox=document.getElementById('questLog');
+      this.listEl=document.getElementById('questList');
+    }
+    activate(id){ const q=this.quests[id]; if(q&&q.status==='inactive'){q.status='active';this._updateLog();}}
+    completeObjective(qid,objId){
+      const q=this.quests[qid];
+      if(!q)return;
+      const o=q.objectives.find(o=>o.id===objId);
+      if(o&&!o.completed){o.completed=true;
+        if(q.objectives.every(o=>o.completed))q.status='completed';
+        this._updateLog();
+      }
+    }
+    _updateLog(){
+      this.listEl.innerHTML='';
+      for(let [qid,q] of Object.entries(this.quests)){
+        if(q.status!=='inactive'){
+          const li=document.createElement('li');
+          li.textContent=`${q.status==='completed'?'✔':'*'} ${q.title}`;
+          this.listEl.appendChild(li);
+          q.objectives.forEach(o=>{
+            const oli=document.createElement('li');
+            oli.textContent=`  [${o.completed?'✔':' '}] ${o.description}`;
+            this.listEl.appendChild(oli);
+          });
+        }
+      }
+    }
+    toggleDisplay(){
+      this.logBox.style.display=this.logBox.style.display==='block'?'none':'block';
+    }
+  }
+  const questManager=new QuestManager(QUESTS);
+  window.addEventListener('keydown',e=>{
+    if(e.key.toLowerCase()==='q')questManager.toggleDisplay();
+  });
+
+
+  // ─────────── ANIMATION, PARALLAX, DAY/NIGHT, AUDIO ───────────
+  class AnimatedTileManager {
+    constructor(tileSize,tileset){
+      this.tileSize=tileSize;this.tileset=tileset;this.elapsed=0;this.cycle={};
+      Object.keys(ANIMATED_TILES).forEach(k=>this.cycle[k]=0);
+    }
+    update(dt){
+      this.elapsed+=dt;
+      for(let k in ANIMATED_TILES){
+        const {frames,duration}=ANIMATED_TILES[k],
+              frameTime=duration/frames;
+        this.cycle[k]=Math.floor(this.elapsed/frameTime)%frames;
+      }
+    }
+    drawAnimatedTiles(ctx,mapData){
+      for(let y=0;y<mapData.height;y++)for(let x=0;x<mapData.width;x++){
+        for(let k in ANIMATED_TILES){
+          const {id}=ANIMATED_TILES[k];
+          if(mapData.tiles[y][x]===id){
+            const frame=this.cycle[k],sx=(id+frame)*this.tileSize;
+            ctx.drawImage(this.tileset,sx,0,this.tileSize,this.tileSize,
+                          x*this.tileSize,y*this.tileSize,this.tileSize,this.tileSize);
+          }
+        }
+      }
+    }
+  }
+
+  class ParallaxLayer {
+    constructor(img, speed){ this.img=new Image(); this.img.src=img; this.speed=speed; }
+    draw(ctx,camera,canvas){
+      if(!this.img.complete)return;
+      const w=this.img.width,h=this.img.height,
+            xoff=-(camera.x*this.speed)%w,
+            yoff=-(camera.y*this.speed)%h;
+      for(let yy=yoff-h;yy<canvas.height;yy+=h)
+        for(let xx=xoff-w;xx<canvas.width;xx+=w)
+          ctx.drawImage(this.img,xx,yy);
+    }
+  }
+
+  class DayNightCycle {
+    constructor(cycleMs){this.duration=cycleMs;this.elapsed=0;}
+    update(dt){this.elapsed=(this.elapsed+dt)%this.duration;}
+    apply(ctx,canvas){
+      const half=this.duration/2,t=this.elapsed;
+      let opacity = t<half
+        ? Math.sin((t/half)*Math.PI)*0.7
+        : Math.sin(((t-half)/half)*Math.PI)*0.7;
+      ctx.fillStyle=`rgba(10,10,50,${opacity.toFixed(3)})`;
+      ctx.fillRect(0,0,canvas.width,canvas.height);
+    }
+  }
+
+  class AudioManager {
+    constructor(){ this.tracks={};this.current=null;this.fadeTime=1000; }
+    load(name,src,loop=true){ const a=new Audio(src);a.loop=loop;a.volume=0;this.tracks[name]=a; }
+    play(name){
+      if(this.current===name)return Promise.resolve();
+      const prev=this.tracks[this.current],next=this.tracks[name];
+      this.current=name; next.play();
+      const start=performance.now();
+      return new Promise(res=>{ 
+        (function step(now){
+          const p=Math.min((now-start)/this.fadeTime,1);
+          if(prev)prev.volume=1-p; next.volume=p;
+          if(p<1)requestAnimationFrame(step.bind(this));
+          else{ if(prev)prev.pause(); res(); }
+        }).call(this,performance.now());
+      });
+    }
+    playSFX(src,pan=0,vol=1){
+      const s=new Audio(src);s.volume=vol;
+      try{
+        const ctx=new (AudioContext||webkitAudioContext)(),
+              srcN=ctx.createMediaElementSource(s),
+              panner=ctx.createStereoPanner();
+        panner.pan.value=pan;
+        srcN.connect(panner).connect(ctx.destination);
+      }catch{}
+      s.play();
+    }
+  }
+  const audio=new AudioManager();
+
+
+  // ─────────── INPUT CONTROLLERS ───────────
+  class MovementController {
+    constructor(engine){ this.engine=engine;window.addEventListener('keydown',e=>this.onKey(e)); }
+    onKey(e){
+      let dx=0,dy=0;
+      if(e.key==='ArrowUp')dy=-1;
+      if(e.key==='ArrowDown')dy=1;
+      if(e.key==='ArrowLeft')dx=-1;
+      if(e.key==='ArrowRight')dx=1;
+      if(dx||dy)this.engine.tryMove(dx*TILE_SIZE,dy*TILE_SIZE);
+    }
+  }
+  // TouchController, GamepadController, HintManager stubs:
+  class TouchController{ constructor(e){} }
+  class GamepadController{ constructor(e){} }
+  class HintManager{ constructor(e){} }
+
+
+  // ─────────── PERFORMANCE & DEBUG ───────────
+  class Culler {
+    constructor(engine){
+      const orig=engine.drawTile.bind(engine);
+      engine.drawTile=(tile,x,y)=>{
+        if(engine.isInView(x,y))orig(tile,x,y);
+      };
+    }
+  }
+  class DebugOverlay {
+    constructor(e){
+      window.addEventListener('keydown',ev=>{
+        if(ev.key==='~'){
+          const el=document.getElementById('debugInfo')||document.createElement('div');
+          el.id='debugInfo';el.style.position='absolute';el.style.top='0';
+          el.style.left='0';el.style.color='lime';el.style.padding='4px';
+          el.textContent=`FPS: ${Math.round(1000/STEP_MS)} | Room: ${currentRoom}`;
+          document.body.appendChild(el);
+        }
+      });
+    }
+  }
+
+
+  // ─────────── ADVANCED GAMEPLAY ───────────
+  class CraftingSystem{ constructor(e){this.engine=e;this.recipes=[];} }
+  class SkillTree{ constructor(e){this.engine=e;} }
+  class ReputationSystem{ constructor(e){this.engine=e;} }
+  class WorldEvents{ constructor(e){this.engine=e;} }
+  class CutsceneManager{ constructor(e){this.engine=e;} }
+
+
+  // ─────────── PERSISTENCE & SOCIAL ───────────
+  class SaveLoad {
+    constructor(e){this.engine=e;this.slots=[null,null,null];}
+    save(i=0){ this.slots[i]=this.engine.serialize();localStorage.setItem('s',JSON.stringify(this.slots));}
+    load(i=0){ const d=JSON.parse(localStorage.getItem('s'))?.[i]; if(d)this.engine.restore(d); }
+  }
+  class CloudSyncStub{ constructor(e){} }
+  class Leaderboard{ constructor(e){} }
+  class Achievements{ constructor(e){} }
+
+
+  // ─────────── TOOLS & EDITORS ───────────
+  class MapEditor{ constructor(e){ if(!e.debug)return; } }
+  class DialogueEditor{ constructor(e){ if(!e.debug)return; } }
+  class DevConsole{ constructor(e){ if(!e.debug)return; } }
+
+
+  // ─────────── ENGINE & LOOP ───────────
+  async function startEngine() {
+    // 1) Preload maps & assets
+    const pre = new Preloader();
+    await pre.loadJSON('townSquare','maps/townSquare.json');
+    await pre.loadJSON('dungeonEntrance','maps/dungeonEntrance.json');
+    await pre.loadJSON('shop','maps/shop.json');
+    MAPS.townSquare      = parseTiled(pre.assets.townSquare);
+    MAPS.dungeonEntrance = parseTiled(pre.assets.dungeonEntrance);
+    MAPS.shop            = parseTiled(pre.assets.shop);
+
+    // preload tileset & audio
+    await pre.loadImage('tileset','assets/tileset.png');
+    await pre.loadAudio('town','audio/town-theme.mp3');
+    await pre.loadAudio('dungeon','audio/dungeon-theme.mp3');
+    await pre.loadAudio('battle','audio/battle-theme.mp3');
+    await pre.loadAudio('footstep','audio/footstep.wav',false);
+    await pre.loadAudio('door','audio/door-open.wav',false);
+    await pre.loadAudio('battleStart','audio/battle-start.mp3',false);
+
+    const canvas = document.getElementById('gameCanvas'),
+          ctx    = canvas.getContext('2d');
+    const engine = { // expose minimal API for controllers & tools
+      tryMove, drawTile:()=>{}, isInView:()=>true,
+      serialize:()=>({}), restore:()=>{}, debug:true
+    };
+
+    // load tileset
+    const tileset = pre.assets.tileset;
+    const mapLoader = new MapLoader(TILE_SIZE,ctx,tileset,{1:true},DOOR_TRIGGERS);
+    let currentRoom='townSquare';
+
+    // player & camera
+    const player={x:TILE_SIZE*1.5,y:TILE_SIZE*1.5,width:TILE_SIZE*0.8,height:TILE_SIZE*0.8,color:'crimson'};
+    const camera={x:0,y:0};
+    const npcs=[new NPC('elder',{x:4,y:2},'gold'), new NPC('shopkeeper',{x:10,y:2},'teal')];
+
+    // phase2 managers
+    const animatedTiles=new AnimatedTileManager(TILE_SIZE,tileset),
+          bgLayers=[new ParallaxLayer('assets/bg-far.png',0.2),
+                    new ParallaxLayer('assets/bg-middle.png',0.5),
+                    new ParallaxLayer('assets/bg-near.png',0.8)],
+          dayNight=new DayNightCycle(120000);
+
+    // AudioManager is already instantiated as `audio`
+
+    // Controllers & systems
+    new MovementController({tryMove});
+    new TouchController(engine);
+    new GamepadController(engine);
+    new HintManager(engine);
+    new Culler(engine);
+    new DebugOverlay(engine);
+    new CraftingSystem(engine);
+    new SkillTree(engine);
+    new ReputationSystem(engine);
+    new WorldEvents(engine);
+    new CutsceneManager(engine);
+    new SaveLoad(engine);
+    new CloudSyncStub(engine);
+    new Leaderboard(engine);
+    new Achievements(engine);
+    new MapEditor(engine);
+    new DialogueEditor(engine);
+    new DevConsole(engine);
+
+    // Helper clamp
+    const clamp=(v,min,max)=>v<min?min:v>max?max:v;
+
+    // room loader
+    async function loadRoom(roomName,spawn){
+      if(TRANSITION_TYPE==='fade') await fadeOut(); else await slideOut();
+      mapLoader.drawMap(MAPS[roomName],roomName); mapLoader.currentRoom=roomName;
+      currentRoom=roomName;
+      player.x=spawn?.x||player.x; player.y=spawn?.y||player.y;
+      // center camera
+      camera.x=clamp(player.x-canvas.width/2,0,MAPS[roomName].width*TILE_SIZE-canvas.width);
+      camera.y=clamp(player.y-canvas.height/2,0,MAPS[roomName].height*TILE_SIZE-canvas.height);
+      renderScene();
+      if(TRANSITION_TYPE==='fade') await fadeIn(); else await slideIn();
+    }
+
+    // movement + triggers
+    function tryMove(dx,dy){
+      const nx=player.x+dx,ny=player.y+dy,
+            midX=nx+player.width/2,midY=ny+player.height/2;
+      if(mapLoader.isBlockedAt(midX,midY))return;
+      player.x=nx;player.y=ny;
+      // footstep SFX
+      audio.playSFX('audio/footstep.wav',dx<0?-0.5:dx>0?0.5:0,0.3);
+      // camera follow
+      camera.x=clamp(player.x-canvas.width/2,0,mapLoader.currentMap.width*TILE_SIZE-canvas.width);
+      camera.y=clamp(player.y-canvas.height/2,0,mapLoader.currentMap.height*TILE_SIZE-canvas.height);
+      renderScene();
+      // dialogue trigger
+      for(let npc of npcs){
+        const dxn=Math.abs(npc.tileX*TILE_SIZE+TILE_SIZE/2-midX),
+              dyn=Math.abs(npc.tileY*TILE_SIZE+TILE_SIZE/2-midY);
+        if(dxn<TILE_SIZE&&dyn<TILE_SIZE){
+          dialogueManager.start(npc.name);
+        }
+      }
+      // quest objective
+      const tx=Math.floor(midX/TILE_SIZE),ty=Math.floor(midY/TILE_SIZE);
+      for(let [qid,q] of Object.entries(QUESTS)){
+        if(q.status==='active'){
+          q.objectives.forEach(o=>{
+            if(!o.completed&&o.x===tx&&o.y===ty){
+              questManager.completeObjective(qid,o.id);
+            }
+          });
+        }
+      }
+      // door trigger
+      const trg=mapLoader.getTriggerAt(midX,midY);
+      if(trg&&trg.to!==currentRoom){
+        audio.playSFX('audio/door-open.wav',0,0.5);
+        loadRoom(trg.to,trg.spawn);
+      }
+    }
+
+    // renderScene override
+    function renderScene(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      ctx.save();
+      // parallax bg
+      for(let l of bgLayers) l.draw(ctx,camera,canvas);
+      // world
+      ctx.translate(-camera.x,-camera.y);
+      mapLoader.drawMap(mapLoader.currentMap);
+      animatedTiles.drawAnimatedTiles(ctx,mapLoader.currentMap);
+      // quest markers
+      for(let q of Object.values(QUESTS)){
+        if(q.status==='active')for(let o of q.objectives){
+          if(!o.completed){
+            ctx.fillStyle='rgba(255,0,0,0.7)';
+            ctx.beginPath();
+            ctx.arc(o.x*TILE_SIZE+TILE_SIZE/2,o.y*TILE_SIZE+TILE_SIZE/2,
+                    TILE_SIZE/4,0,2*Math.PI);
+            ctx.fill();
+          }
+        }
+      }
+      // NPCs
+      for(let npc of npcs) npc.draw(ctx,TILE_SIZE);
+      // player
+      ctx.fillStyle=player.color;
+      ctx.fillRect(player.x,player.y,player.width,player.height);
+      ctx.restore();
+      // day/night
+      dayNight.apply(ctx,canvas);
+    }
+
+    // fixed-timestep loop
+    let lastTs=performance.now(),acc=0;
+    function update(dt){
+      // NPCs
+      for(let npc of npcs) npc.update(mapLoader.currentMap,{1:true});
+      // animations & cycle
+      animatedTiles.update(dt); dayNight.update(dt);
+      // adaptive music
+      audio.play(currentRoom==='townSquare'?'town':'dungeon');
+    }
+    function loop(ts){
+      const delta=Math.min(ts-lastTs,STEP_MS*4);
+      lastTs=ts; acc+=delta;
+      while(acc>=STEP_MS){ update(STEP_MS); acc-=STEP_MS; }
+      renderScene(); requestAnimationFrame(loop);
+    }
+
+    // start
+    await loadRoom(currentRoom,{x:player.x,y:player.y});
+    requestAnimationFrame(loop);
+  }
+
+  startEngine();
+  </script>
+</body>
+</html>
