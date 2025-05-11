@@ -3,98 +3,52 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>2D RPG with Animated Sprites</title>
+  <title>2D RPG with Animated Sprite</title>
   <style>
     body { margin:0; overflow:hidden; background:#000; }
-    #gameContainer { position:relative; width:512px; height:384px; margin:0 auto; overflow:hidden; }
-    canvas { display:block; }
-    /* Overlays hidden by default */
-    #battleUI, #dialogueBox, #questLog {
-      display:none; position:absolute; top:0; left:0;
-      width:100%; height:100%; font-family:Arial,sans-serif; color:#fff;
-    }
-    #battleUI.active {
-      display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,0.8);
-    }
-    #dialogueBox.active, #questLog.active { display:block; }
-    #fadeOverlay {
-      position:absolute; top:0; left:0; width:100%; height:100%;
-      background:#000; opacity:0; pointer-events:none;
-      transition:opacity 500ms ease;
-    }
-    /* “Press E to talk” hint */
-    #talkHint {
-      position:absolute; bottom:60px; left:50%; transform:translateX(-50%);
-      background:rgba(0,0,0,0.7); color:#fff; padding:4px 8px;
-      border-radius:4px; font-family:Arial,sans-serif;
-      display:none; pointer-events:none;
-    }
-    /* Debug overlay */
-    #debugInfo {
-      position:absolute; top:0; left:0; color:lime; padding:4px;
-      font-family:monospace;
-    }
+    #gameCanvas { display:block; margin:0 auto; background:#000; }
   </style>
 </head>
 <body>
-  <div id="gameContainer">
-    <canvas id="gameCanvas" width="512" height="384"></canvas>
-    <div id="fadeOverlay"></div>
-
-    <!-- Battle UI -->
-    <div id="battleUI">
-      <canvas id="battleCanvas" width="512" height="384" style="background:#222;"></canvas>
-      <div id="battleMenu" style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);">
-        <ul id="menuOptions" style="list-style:none;padding:0;margin:0;">
-          <li>▶ Attack</li><li>   Defend</li><li>   Item</li>
-        </ul>
-      </div>
-    </div>
-
-    <!-- Dialogue Box -->
-    <div id="dialogueBox" style="
-      bottom:20px; left:50%; transform:translateX(-50%);
-      width:70%; background:rgba(0,0,0,0.8); padding:12px; border-radius:8px;
-    ">
-      <p id="dialogueText" style="margin:0 0 8px;"></p>
-      <ul id="choiceList" style="list-style:none;padding:0;margin:0;"></ul>
-    </div>
-
-    <!-- Quest Log -->
-    <div id="questLog" style="
-      top:20px; right:20px; width:200px; max-height:70%;
-      background:rgba(0,0,0,0.8); padding:12px; border-radius:8px; overflow-y:auto;
-    ">
-      <h3 style="margin:0 0 8px;">Quest Log</h3>
-      <ul id="questList" style="list-style:none;padding:0;margin:0;"></ul>
-    </div>
-
-    <!-- Talk hint -->
-    <div id="talkHint">Press E to talk</div>
-
-    <!-- Debug info -->
-    <div id="debugInfo" style="display:none;"></div>
-  </div>
-
+  <canvas id="gameCanvas" width="512" height="384"></canvas>
   <script>
-  (function(){
-    const TILE_SIZE = 32, FPS = 60, STEP = 1000 / FPS;
-    let animElapsed = 0, currentFrame = 0, showDebug = false;
+    const TILE_SIZE = 32;
+    // Simple 16×12 map: 0=floor, 1=wall, 2=door
+    const MAP = [
+      [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,0,0,2,0,0,0,0,0,0,0,2,0,0,0,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+      [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+    ];
 
-    // ───── Procedural sprite-sheet generator ─────
+    const canvas = document.getElementById('gameCanvas');
+    const ctx    = canvas.getContext('2d');
+
+    // Player “center” position
+    const player = { x: TILE_SIZE * 1.5, y: TILE_SIZE * 1.5 };
+
+    // Generate a 4-frame sprite sheet in-memory
     function generateSpriteSheet(color) {
-      const frames = 4, csize = TILE_SIZE, cvs = document.createElement('canvas');
-      cvs.width = csize * frames; cvs.height = csize;
+      const frames = 4, c = TILE_SIZE, cvs = document.createElement('canvas');
+      cvs.width = c * frames; cvs.height = c;
       const g = cvs.getContext('2d');
       for (let f = 0; f < frames; f++) {
-        const x0 = f * csize;
-        // body
+        const x0 = f * c;
+        // torso
         g.fillStyle = color;
         g.fillRect(x0 + 8, 8, 16, 16);
         // head
         g.fillStyle = '#000';
         g.fillRect(x0 + 12, 4, 8, 8);
-        // legs animate: alternate frame movements
+        // legs alternate frames
         g.fillStyle = color;
         if (f % 2 === 0) {
           g.fillRect(x0 + 10, 24, 4, 8);
@@ -109,266 +63,60 @@
       return img;
     }
 
-    // generate sprites
-    const playerSheet = generateSpriteSheet('crimson'),
-          elderSheet  = generateSpriteSheet('gold'),
-          shopSheet   = generateSpriteSheet('teal');
+    // Create the player sprite sheet
+    const playerSheet = generateSpriteSheet('crimson');
 
-    // ───── Inline map data ─────
-    function genMap(w,h,doors){
-      const tiles = [];
-      for(let y=0;y<h;y++){
-        const row = [];
-        for(let x=0;x<w;x++){
-          let id = (x===0||y===0||x===w-1||y===h-1) ? 1 : 0;
-          doors.forEach(([dx,dy]) => { if(x===dx&&y===dy) id = 2; });
-          row.push(id);
+    // Draw the static map once into an off-screen canvas for speed
+    const mapCanvas = document.createElement('canvas');
+    mapCanvas.width  = canvas.width;
+    mapCanvas.height = canvas.height;
+    const mapCtx = mapCanvas.getContext('2d');
+    MAP.forEach((row, y) => {
+      row.forEach((id, x) => {
+        switch (id) {
+          case 0: mapCtx.fillStyle = '#8FBC8F'; break; // floor
+          case 1: mapCtx.fillStyle = '#555';    break; // wall
+          case 2: mapCtx.fillStyle = '#8B4513'; break; // door
         }
-        tiles.push(row);
-      }
-      return { width:w, height:h, tiles };
-    }
-    const MAPS = {
-      town: genMap(16,12,[[3,2],[10,2]]),
-      cave: genMap(16,12,[[1,1]]),
-      shop: genMap(16,12,[[0,5]])
-    };
-    const DOORS = {
-      town: {
-        '3,2': { to:'cave', spawn:{x:1.5*TILE_SIZE,y:1.5*TILE_SIZE} },
-        '10,2':{ to:'shop', spawn:{x:2.5*TILE_SIZE,y:3.5*TILE_SIZE} }
-      },
-      cave: { '1,1': { to:'town', spawn:{x:3.5*TILE_SIZE,y:2.5*TILE_SIZE} } },
-      shop: { '0,5': { to:'town', spawn:{x:10.5*TILE_SIZE,y:2.5*TILE_SIZE} } }
-    };
+        mapCtx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      });
+    });
 
-    // ───── DOM refs ─────
-    const canvas    = document.getElementById('gameCanvas'),
-          ctx       = canvas.getContext('2d'),
-          fadeDiv   = document.getElementById('fadeOverlay'),
-          container = document.getElementById('gameContainer'),
-          talkHint  = document.getElementById('talkHint'),
-          debugInfo = document.getElementById('debugInfo');
-
-    fadeDiv.style.transition   = 'opacity 500ms ease';
-    container.style.transition = 'transform 500ms ease';
-
-    // ───── Classes ─────
-    class MapLoader {
-      constructor(ts, img, blocked, doors){
-        this.ts=ts; this.img=img; this.blocked=blocked; this.doors=doors;
-      }
-      draw(m,room){
-        this.map=m; this.room=room;
-        m.tiles.forEach((row,y) =>
-          row.forEach((id,x) =>
-            ctx.drawImage(this.img, id*this.ts,0,this.ts,this.ts,
-                          x*this.ts,y*this.ts,this.ts,this.ts)
-          )
-        );
-      }
-      idAt(px,py){
-        const tx=Math.floor(px/this.ts),
-              ty=Math.floor(py/this.ts);
-        if(!this.map||tx<0||ty<0||tx>=this.map.width||ty>=this.map.height) return null;
-        return this.map.tiles[ty][tx];
-      }
-      isBlocked(px,py){ return this.blocked(this.idAt(px,py)); }
-      getTrigger(px,py){
-        const tx=Math.floor(px/this.ts),
-              ty=Math.floor(py/this.ts),
-              key=`${tx},${ty}`;
-        return (this.doors[this.room]||{})[key]||null;
-      }
-    }
-
-    class Pathfinder {
-      constructor(m,b){this.w=m.width;this.h=m.height;this.t=m.tiles;this.b=b;}
-      findPath(s,e){
-        const ser=o=>`${o.x},${o.y}`,
-              inB=o=>o.x>=0&&o.y>=0&&o.x<this.w&&o.y<this.h,
-              walk=o=>!this.b(this.t[o.y][o.x]),
-              nbrs=o=>[{x:o.x+1,y:o.y},{x:o.x-1,y:o.y},{x:o.x,y:o.y+1},{x:o.x,y:o.y-1}]
-                        .filter(inB).filter(walk),
-              h=o=>Math.abs(o.x-e.x)+Math.abs(o.y-e.y);
-        let open=new Set([ser(s)]), came={}, g={ [ser(s)]:0 }, f={ [ser(s)]:h(s) };
-        while(open.size){
-          let ck, cf=Infinity;
-          for(let k of open) if((f[k]||Infinity)<cf){ cf=f[k]; ck=k; }
-          const [cx,cy]=ck.split(',').map(Number), cur={x:cx,y:cy};
-          if(cx===e.x&&cy===e.y){
-            const path=[]; let k=ck;
-            while(k!==ser(s)){ const [px,py]=k.split(',').map(Number); path.push({x:px,y:py}); k=came[k]; }
-            return path.reverse();
-          }
-          open.delete(ck);
-          nbrs(cur).forEach(n=>{
-            const nk=ser(n), ng=(g[ck]||0)+1;
-            if(ng<(g[nk]||Infinity)){ came[nk]=ck; g[nk]=ng; f[nk]=ng+h(n); open.add(nk); }
-          });
-        }
-        return [];
-      }
-    }
-
-    class NPC {
-      constructor(name,pos,sprite){
-        this.name=name; this.x=pos.x; this.y=pos.y; this.sprite=sprite; this.path=[];
-      }
-      step(map){
-        if(!this.path.length){
-          const target={x:Math.floor(Math.random()*map.width),y:Math.floor(Math.random()*map.height)};
-          this.path=new Pathfinder(map,id=>id===1).findPath({x:this.x,y:this.y},target);
-        }
-        if(this.path.length){
-          const n=this.path.shift();
-          this.x=n.x; this.y=n.y;
-        }
-      }
-      draw(){
-        ctx.drawImage(
-          this.sprite,
-          currentFrame*TILE_SIZE, 0, TILE_SIZE, TILE_SIZE,
-          this.x*TILE_SIZE, this.y*TILE_SIZE,
-          TILE_SIZE, TILE_SIZE
-        );
-      }
-    }
-
-    class DialogueManager {
-      /* same as before, but uses .active class */
-    }
-    class QuestManager {
-      /* same as before */
-    }
-    class BattleManager {
-      /* same as before */
-    }
-    class DayNight {
-      /* same as before */
-    }
-
-    // instantiate managers
-    const dialogueManager = new DialogueManager();
-    const questManager    = new QuestManager();
-    const battleManager   = new BattleManager();
-    const dayNight        = new DayNight(120000);
-
-    // proximity hint
-    function isNearNPC(){
-      const cx=player.x+player.w/2, cy=player.y+player.h/2;
-      for(let npc of npcs){
-        const dx=Math.abs(npc.x*TILE_SIZE+TILE_SIZE/2-cx),
-              dy=Math.abs(npc.y*TILE_SIZE+TILE_SIZE/2-cy);
-        if(dx<TILE_SIZE&&dy<TILE_SIZE) return npc.name;
-      }
-      return null;
-    }
-
-    // ───── Main Engine ─────
-    const tilesetImg = new Image();
-    tilesetImg.src = createTileset();
-    let mapLoader, room='town', map, player, npcs;
-
-    function tryStart(){
-      if(!tilesetImg.complete||!playerSheet.complete||!elderSheet.complete||!shopSheet.complete) return;
-      init(); // all assets ready
-    }
-    [tilesetImg, playerSheet, elderSheet, shopSheet].forEach(img=>img.addEventListener('load', tryStart));
-
-    function init(){
-      mapLoader = new MapLoader(TILE_SIZE, tilesetImg, id=>id===1, DOORS);
-      map = MAPS[room];
-      player = { x:1.5*TILE_SIZE, y:1.5*TILE_SIZE, w:TILE_SIZE, h:TILE_SIZE };
-      npcs = [
-        new NPC('elder',{x:4,y:2}, elderSheet),
-        new NPC('shopkeeper',{x:10,y:2}, shopSheet)
-      ];
-      loadRoom(room,{x:player.x,y:player.y}).then(()=>requestAnimationFrame(loop));
-      window.addEventListener('keydown', onKey);
-    }
-
-    async function loadRoom(r,spawn){
-      await fadeOut();
-      room=r; map=MAPS[r];
-      mapLoader.draw(map,room);
-      if(spawn){ player.x=spawn.x; player.y=spawn.y; }
-      await fadeIn();
-    }
-
-    function onKey(e){
-      // movement
-      const moves={
-        'ArrowUp':[0,-TILE_SIZE],'ArrowDown':[0,TILE_SIZE],
-        'ArrowLeft':[-TILE_SIZE,0],'ArrowRight':[TILE_SIZE,0]
-      }[e.key];
-      if(moves) tryMove(...moves);
-
-      // talk
-      if(e.key==='e'){
-        const npcName = isNearNPC();
-        if(npcName) dialogueManager.start(npcName);
-      }
-      // quest log
-      if(e.key==='q') questManager.toggle();
-      // battle stub
-      if(e.key==='b'&&battleManager.state==='idle') battleManager.start();
-      // debug toggle
-      if(e.key==='~'){
-        showDebug = !showDebug;
-        debugInfo.style.display = showDebug ? 'block' : 'none';
-      }
-    }
-
-    function tryMove(dx,dy){
-      const nx=player.x+dx, ny=player.y+dy,
-            cx=nx+player.w/2, cy=ny+player.h/2;
-      if(mapLoader.isBlocked(cx,cy)) return;
-      player.x=nx; player.y=ny;
-      drawWorld();
-      // talk hint
-      talkHint.style.display = isNearNPC() ? 'block' : 'none';
-      // door
-      const trg = mapLoader.getTrigger(cx,cy);
-      if(trg) loadRoom(trg.to,trg.spawn);
-    }
-
-    function drawWorld(){
-      ctx.clearRect(0,0,512,384);
-      mapLoader.draw(map,room);
-      // NPCs
-      npcs.forEach(npc=>npc.draw());
-      // player
+    // Draw frame `f` of the player
+    function drawScene(frame) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // draw map
+      ctx.drawImage(mapCanvas, 0, 0);
+      // draw player sprite (centered)
       ctx.drawImage(
         playerSheet,
-        currentFrame*TILE_SIZE, 0, TILE_SIZE, TILE_SIZE,
-        player.x, player.y, player.w, player.h
+        frame * TILE_SIZE, 0, TILE_SIZE, TILE_SIZE,
+        player.x - TILE_SIZE / 2,
+        player.y - TILE_SIZE / 2,
+        TILE_SIZE,
+        TILE_SIZE
       );
-      dayNight.apply(ctx,canvas);
     }
 
-    function loop(now){
-      const dt = now - (loop.last||now);
-      loop.last = now;
-      let d = Math.min(dt, STEP*4), acc = (loop.acc||0) + d;
-      loop.acc = acc % STEP;
-      while(acc >= STEP){
-        // update NPCs
-        npcs.forEach(npc=>npc.step(map));
-        // update day/night
-        dayNight.update(STEP);
-        // update animation
-        animElapsed += STEP;
-        currentFrame = Math.floor(animElapsed / 150) % 4;
-        acc -= STEP;
-      }
-      drawWorld();
-      if(showDebug){
-        debugInfo.textContent = `FPS:${Math.round(1000/STEP)} Room:${room}`;
-      }
+    // Animation loop
+    function loop(ts) {
+      const frame = Math.floor(ts / 150) % 4;
+      drawScene(frame);
       requestAnimationFrame(loop);
     }
-  })();
+    requestAnimationFrame(loop);
+
+    // Handle arrow-key movement
+    window.addEventListener('keydown', e => {
+      const step = TILE_SIZE;
+      if (e.key === 'ArrowUp')    player.y -= step;
+      else if (e.key === 'ArrowDown')  player.y += step;
+      else if (e.key === 'ArrowLeft')  player.x -= step;
+      else if (e.key === 'ArrowRight') player.x += step;
+      // clamp to bounds
+      player.x = Math.max(step/2, Math.min(canvas.width - step/2, player.x));
+      player.y = Math.max(step/2, Math.min(canvas.height - step/2, player.y));
+    });
   </script>
 </body>
 </html>
