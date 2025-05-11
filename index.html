@@ -1,140 +1,92 @@
-(() => {
-  // ───────── CONSTANTS ─────────
-  const VIEW_W = 800, VIEW_H = 600;
-  const TILE = 32, MAP_C = 50, MAP_R = 32;
-  const WORLD_W = MAP_C * TILE, WORLD_H = MAP_R * TILE;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>NeoCity Neon Grid Test</title>
+  <style>
+    html,body { margin:0; padding:0; background:#000; overflow:hidden; }
+    #gameCanvas { display:block; margin:0 auto; position:relative; }
+    #hud { position:absolute; top:10px; left:10px; color:#0ff; font:16px monospace; z-index:5; }
+    .choice { margin-left:10px; color:#0ff; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
+  <div id="hud">
+    Reputation: <span id="rep">0</span>
+    <span class="choice" id="skillBtn">[Skills]</span>
+  </div>
 
-  // ───────── CANVASES ─────────
-  const canvas = document.getElementById('gameCanvas'),
-        ctx = canvas.getContext('2d');
-  const staticCanvas = new OffscreenCanvas(WORLD_W, WORLD_H),
-        staticCtx = staticCanvas.getContext('2d');
-  const lightCanvas = new OffscreenCanvas(VIEW_W, VIEW_H),
-        lightCtx = lightCanvas.getContext('2d');
+  <script>
+  (function(){
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const VIEW_W = canvas.width, VIEW_H = canvas.height;
+    const TILE = 32, MAP_C = 50, MAP_R = 32;
+    const WORLD_W = MAP_C * TILE, WORLD_H = MAP_R * TILE;
 
-  // ───────── STATE ─────────
-  let player = { x: 5 * TILE, y: 5 * TILE };
-  let keys = {}, rainDrops = [], lights = [];
-  let dayTime = 0, glitchTimer = 0;
+    let cityOffset = 0;
+    let rep = 0;
+    document.getElementById('skillBtn').onclick = () => alert('Skills clicked');
 
-  // ───────── TILEMAP ─────────
-  function drawStaticMap() {
-    const pal = { floor: "#222", wall: "#111", water: "#004", building: "#444" };
-    for (let y = 0; y < MAP_R; y++) {
-      for (let x = 0; x < MAP_C; x++) {
-        staticCtx.fillStyle = pal.floor;
-        staticCtx.fillRect(x * TILE, y * TILE, TILE, TILE);
-        if (Math.random() < 0.1) {
-          staticCtx.fillStyle = pal.building;
-          staticCtx.fillRect(x * TILE, y * TILE, TILE, TILE);
-        }
+    function drawParallax() {
+      cityOffset = (cityOffset + 0.2) % VIEW_W;
+      ctx.save();
+      ctx.translate(-cityOffset, 0);
+      ctx.fillStyle = 'rgba(255,0,255,0.1)';
+      for (let i = 0; i < VIEW_W; i += VIEW_W/20) {
+        ctx.fillRect(i, VIEW_H*0.6, VIEW_W/30, VIEW_H*0.4);
       }
+      ctx.translate(VIEW_W, 0);
+      for (let i = 0; i < VIEW_W; i += VIEW_W/20) {
+        ctx.fillRect(i, VIEW_H*0.6, VIEW_W/30, VIEW_H*0.4);
+      }
+      ctx.restore();
     }
-  }
 
-  // ───────── WEATHER ─────────
-  function initWeather() {
-    rainDrops = Array.from({ length: 200 }, () => ({
-      x: Math.random() * VIEW_W,
-      y: Math.random() * VIEW_H,
-      vy: 2 + Math.random() * 2,
-      alpha: 0.2 + Math.random() * 0.3,
-    }));
-  }
-
-  function updateWeather(dt) {
-    rainDrops.forEach(r => {
-      r.y += r.vy * dt / 16;
-      if (r.y > VIEW_H) r.y = 0;
-    });
-  }
-
-  function drawWeather() {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(0,200,200,0.2)';
-    rainDrops.forEach(r => {
-      ctx.globalAlpha = r.alpha;
-      ctx.beginPath();
-      ctx.moveTo(r.x, r.y);
-      ctx.lineTo(r.x, r.y + 10);
-      ctx.stroke();
-    });
-    ctx.restore();
-  }
-
-  // ───────── LIGHTING ─────────
-  function drawLighting() {
-    lightCtx.clearRect(0, 0, VIEW_W, VIEW_H);
-    lights.forEach(light => {
-      const grd = lightCtx.createRadialGradient(
-        light.x, light.y, 0, light.x, light.y, light.radius
-      );
-      grd.addColorStop(0, `rgba(255,255,200,${light.intensity})`);
-      grd.addColorStop(1, 'rgba(0,0,0,0)');
-      lightCtx.fillStyle = grd;
-      lightCtx.beginPath();
-      lightCtx.arc(light.x, light.y, light.radius, 0, 2 * Math.PI);
-      lightCtx.fill();
-    });
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.drawImage(lightCanvas, 0, 0);
-    ctx.globalCompositeOperation = 'source-over';
-  }
-
-  // ───────── PARALLAX BACKGROUND ─────────
-  let cityOffset = 0;
-  function drawParallax() {
-    cityOffset = (cityOffset + 0.1) % VIEW_W;
-    ctx.save();
-    ctx.translate(-cityOffset, 0);
-    ctx.fillStyle = 'rgba(50,50,70,0.2)';
-    for (let i = 0; i < 20; i++) {
-      ctx.fillRect(i * VIEW_W / 20, VIEW_H * 0.6, VIEW_W / 30, VIEW_H * 0.4);
+    function drawNeonGrid() {
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,0,255,0.15)';
+      ctx.lineWidth = 1;
+      // vertical lines
+      for (let x = 0; x <= WORLD_W; x += TILE*5) {
+        const sx = (x + cityOffset*0.5) % VIEW_W;
+        ctx.beginPath();
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, VIEW_H);
+        ctx.stroke();
+      }
+      // horizontal lines
+      for (let y = 0; y <= WORLD_H; y += TILE*5) {
+        const sy = (y + cityOffset*0.3) % VIEW_H;
+        ctx.beginPath();
+        ctx.moveTo(0, sy);
+        ctx.lineTo(VIEW_W, sy);
+        ctx.stroke();
+      }
+      ctx.restore();
     }
-    ctx.translate(VIEW_W, 0);
-    for (let i = 0; i < 20; i++) {
-      ctx.fillRect(i * VIEW_W / 20, VIEW_H * 0.6, VIEW_W / 30, VIEW_H * 0.4);
+
+    function mainLoop() {
+      // clear
+      ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+
+      // parallax skyline
+      drawParallax();
+
+      // neon grid
+      drawNeonGrid();
+
+      // HUD update if needed
+      // document.getElementById('rep').innerText = rep;
+
+      requestAnimationFrame(mainLoop);
     }
-    ctx.restore();
-  }
 
-  // ───────── INPUT ─────────
-  canvas.addEventListener('keydown', e => keys[e.key] = true);
-  canvas.addEventListener('keyup', e => keys[e.key] = false);
-
-  function updateInput(dt) {
-    const speed = 150 * dt / 1000;
-    if (keys['ArrowUp']) player.y -= speed;
-    if (keys['ArrowDown']) player.y += speed;
-    if (keys['ArrowLeft']) player.x -= speed;
-    if (keys['ArrowRight']) player.x += speed;
-  }
-
-  // ───────── MAIN LOOP ─────────
-  function mainLoop(ts) {
-    const dt = 16;
-    dayTime = ts;
-
-    // Update
-    updateInput(dt);
-    updateWeather(dt);
-
-    // Draw
-    ctx.clearRect(0, 0, VIEW_W, VIEW_H);
-    drawParallax();
-    ctx.drawImage(staticCanvas, 0, 0);
-    drawWeather();
-    drawLighting();
-
-    requestAnimationFrame(mainLoop);
-  }
-
-  // ───────── BOOTSTRAP ─────────
-  function initAll() {
-    drawStaticMap();
-    initWeather();
-    lights.push({ x: 400, y: 300, radius: 150, intensity: 0.8 });
-    requestAnimationFrame(mainLoop);
-  }
-  initAll();
-})();
+    // start
+    mainLoop();
+  })();
+  </script>
+</body>
+</html>
