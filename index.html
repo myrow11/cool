@@ -293,4 +293,82 @@
       room=r; map=MAPS[r];
       mapLoader.draw(map,room);
       if(spawn){ player.x=spawn.x; player.y=spawn.y; }
-      await
+      await fadeIn();
+    }
+
+    function onKey(e){
+      // movement
+      const moves={
+        'ArrowUp':[0,-TILE_SIZE],'ArrowDown':[0,TILE_SIZE],
+        'ArrowLeft':[-TILE_SIZE,0],'ArrowRight':[TILE_SIZE,0]
+      }[e.key];
+      if(moves) tryMove(...moves);
+
+      // talk
+      if(e.key==='e'){
+        const npcName = isNearNPC();
+        if(npcName) dialogueManager.start(npcName);
+      }
+      // quest log
+      if(e.key==='q') questManager.toggle();
+      // battle stub
+      if(e.key==='b'&&battleManager.state==='idle') battleManager.start();
+      // debug toggle
+      if(e.key==='~'){
+        showDebug = !showDebug;
+        debugInfo.style.display = showDebug ? 'block' : 'none';
+      }
+    }
+
+    function tryMove(dx,dy){
+      const nx=player.x+dx, ny=player.y+dy,
+            cx=nx+player.w/2, cy=ny+player.h/2;
+      if(mapLoader.isBlocked(cx,cy)) return;
+      player.x=nx; player.y=ny;
+      drawWorld();
+      // talk hint
+      talkHint.style.display = isNearNPC() ? 'block' : 'none';
+      // door
+      const trg = mapLoader.getTrigger(cx,cy);
+      if(trg) loadRoom(trg.to,trg.spawn);
+    }
+
+    function drawWorld(){
+      ctx.clearRect(0,0,512,384);
+      mapLoader.draw(map,room);
+      // NPCs
+      npcs.forEach(npc=>npc.draw());
+      // player
+      ctx.drawImage(
+        playerSheet,
+        currentFrame*TILE_SIZE, 0, TILE_SIZE, TILE_SIZE,
+        player.x, player.y, player.w, player.h
+      );
+      dayNight.apply(ctx,canvas);
+    }
+
+    function loop(now){
+      const dt = now - (loop.last||now);
+      loop.last = now;
+      let d = Math.min(dt, STEP*4), acc = (loop.acc||0) + d;
+      loop.acc = acc % STEP;
+      while(acc >= STEP){
+        // update NPCs
+        npcs.forEach(npc=>npc.step(map));
+        // update day/night
+        dayNight.update(STEP);
+        // update animation
+        animElapsed += STEP;
+        currentFrame = Math.floor(animElapsed / 150) % 4;
+        acc -= STEP;
+      }
+      drawWorld();
+      if(showDebug){
+        debugInfo.textContent = `FPS:${Math.round(1000/STEP)} Room:${room}`;
+      }
+      requestAnimationFrame(loop);
+    }
+  })();
+  </script>
+</body>
+</html>
