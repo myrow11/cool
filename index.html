@@ -3,120 +3,168 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>2D RPG with Animated Sprite</title>
+  <title>2D RPG – Polished Visuals</title>
   <style>
     body { margin:0; overflow:hidden; background:#000; }
-    #gameCanvas { display:block; margin:0 auto; background:#000; }
+    canvas { display:block; margin:0 auto; background:#000; }
   </style>
 </head>
 <body>
   <canvas id="gameCanvas" width="512" height="384"></canvas>
   <script>
-    const TILE_SIZE = 32;
-    // Simple 16×12 map: 0=floor, 1=wall, 2=door
-    const MAP = [
-      [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,0,0,2,0,0,0,0,0,0,0,2,0,0,0,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
-      [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
-    ];
+  const TILE_SIZE = 32;
+  const MAP = [
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+    [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1],
+    [1,0,0,2,0,0,0,3,0,0,0,2,0,0,0,1],
+    [1,0,0,0,0,0,0,3,0,0,0,0,0,0,0,1],
+    [1,0,3,3,3,0,0,3,0,0,3,3,3,0,0,1],
+    [1,0,0,0,0,0,0,3,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,3,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,3,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,3,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,3,0,0,0,0,0,0,0,1],
+    [1,0,0,0,0,0,0,3,0,0,0,0,0,0,0,1],
+    [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+  ];
+  const canvas = document.getElementById('gameCanvas'),
+        ctx    = canvas.getContext('2d'),
+        W      = canvas.width,
+        H      = canvas.height;
 
-    const canvas = document.getElementById('gameCanvas');
-    const ctx    = canvas.getContext('2d');
+  // Generate a 5-tile tileset: floor(0), wall(1), door(2), water0(3), water1(4)
+  function createTileset() {
+    const frames = 5, cvs = document.createElement('canvas');
+    cvs.width = TILE_SIZE * frames; cvs.height = TILE_SIZE;
+    const g = cvs.getContext('2d');
 
-    // Player “center” position
-    const player = { x: TILE_SIZE * 1.5, y: TILE_SIZE * 1.5 };
+    // 0: floor
+    g.fillStyle = '#88cc88';
+    g.fillRect(0,0,TILE_SIZE,TILE_SIZE);
+    g.fillStyle = '#77bb77';
+    for(let i=0;i<6;i++) g.fillRect(Math.random()*(TILE_SIZE-2),Math.random()*(TILE_SIZE-2),2,2);
 
-    // Generate a 4-frame sprite sheet in-memory
-    function generateSpriteSheet(color) {
-      const frames = 4, c = TILE_SIZE, cvs = document.createElement('canvas');
-      cvs.width = c * frames; cvs.height = c;
-      const g = cvs.getContext('2d');
-      for (let f = 0; f < frames; f++) {
-        const x0 = f * c;
-        // torso
-        g.fillStyle = color;
-        g.fillRect(x0 + 8, 8, 16, 16);
-        // head
-        g.fillStyle = '#000';
-        g.fillRect(x0 + 12, 4, 8, 8);
-        // legs alternate frames
-        g.fillStyle = color;
-        if (f % 2 === 0) {
-          g.fillRect(x0 + 10, 24, 4, 8);
-          g.fillRect(x0 + 18, 24, 4, 8);
-        } else {
-          g.fillRect(x0 + 8, 24, 4, 8);
-          g.fillRect(x0 + 20, 24, 4, 8);
-        }
+    // 1: wall
+    const x1 = TILE_SIZE;
+    g.fillStyle = '#999';
+    g.fillRect(x1,0,TILE_SIZE,TILE_SIZE);
+    g.fillStyle = '#666';
+    for(let y=0;y<TILE_SIZE;y+=8)for(let x=0;x<TILE_SIZE;x+=8)
+      g.fillRect(x1+x+1,y+1,6,6);
+
+    // 2: door
+    const x2 = TILE_SIZE*2;
+    g.fillStyle = '#8b4513';
+    g.fillRect(x2,0,TILE_SIZE,TILE_SIZE);
+    g.fillStyle = '#553311';
+    g.fillRect(x2+TILE_SIZE*0.2, TILE_SIZE*0.1, TILE_SIZE*0.6, TILE_SIZE*0.8);
+
+    // 3 & 4: animated water
+    for(let f=0;f<2;f++){
+      const x = TILE_SIZE * (3+f);
+      // base
+      g.fillStyle = '#3377cc'; g.fillRect(x,0,TILE_SIZE,TILE_SIZE);
+      // waves
+      g.strokeStyle = 'rgba(255,255,255,0.5)';
+      g.lineWidth = 2;
+      g.beginPath();
+      for(let i=-1;i<=TILE_SIZE;i+=8){
+        g.moveTo(x-4, i + (f*4));
+        g.quadraticCurveTo(x+TILE_SIZE/2, i+4 + (f*4), x+TILE_SIZE+4, i + (f*4));
       }
-      const img = new Image();
-      img.src = cvs.toDataURL();
-      return img;
+      g.stroke();
     }
 
-    // Create the player sprite sheet
-    const playerSheet = generateSpriteSheet('crimson');
+    const img = new Image();
+    img.src = cvs.toDataURL();
+    return img;
+  }
 
-    // Draw the static map once into an off-screen canvas for speed
-    const mapCanvas = document.createElement('canvas');
-    mapCanvas.width  = canvas.width;
-    mapCanvas.height = canvas.height;
-    const mapCtx = mapCanvas.getContext('2d');
-    MAP.forEach((row, y) => {
-      row.forEach((id, x) => {
-        switch (id) {
-          case 0: mapCtx.fillStyle = '#8FBC8F'; break; // floor
-          case 1: mapCtx.fillStyle = '#555';    break; // wall
-          case 2: mapCtx.fillStyle = '#8B4513'; break; // door
+  // Generate a 4-frame player sprite sheet
+  function createPlayerSheet() {
+    const frames = 4, c = TILE_SIZE, cvs = document.createElement('canvas');
+    cvs.width = c*frames; cvs.height = c;
+    const g = cvs.getContext('2d');
+    for(let f=0;f<frames;f++){
+      const x0 = f * c;
+      // body
+      g.fillStyle = 'crimson';
+      g.fillRect(x0+8, 8, 16, 16);
+      // head
+      g.fillStyle = '#000';
+      g.fillRect(x0+12,4,8,8);
+      // legs
+      g.fillStyle = 'crimson';
+      const offset = (f%2)?2:-2;
+      g.fillRect(x0+10,24+offset,4,8);
+      g.fillRect(x0+18,24-offset,4,8);
+    }
+    const img = new Image();
+    img.src = cvs.toDataURL();
+    return img;
+  }
+
+  const tilesetImg  = createTileset(),
+        playerSheet = createPlayerSheet();
+
+  let player = { x: TILE_SIZE*1.5, y: TILE_SIZE*1.5 },
+      lastTime = 0;
+
+  function drawBackground() {
+    // simple vertical gradient sky
+    const grad = ctx.createLinearGradient(0,0,0,H);
+    grad.addColorStop(0, '#a0d8f1');
+    grad.addColorStop(1, '#508dcf');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0,0,W,H);
+  }
+
+  function draw(ts) {
+    // clear
+    drawBackground();
+
+    // draw map
+    MAP.forEach((row,y)=>{
+      row.forEach((id,x)=>{
+        let sx = id * TILE_SIZE;
+        if(id === 3) {
+          // water: alternate between frame 3 and 4 every 500ms
+          const frame = Math.floor(ts/500)%2;
+          sx = (3+frame)*TILE_SIZE;
         }
-        mapCtx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+        ctx.drawImage(
+          tilesetImg,
+          sx, 0, TILE_SIZE, TILE_SIZE,
+          x*TILE_SIZE, y*TILE_SIZE, TILE_SIZE, TILE_SIZE
+        );
       });
     });
 
-    // Draw frame `f` of the player
-    function drawScene(frame) {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      // draw map
-      ctx.drawImage(mapCanvas, 0, 0);
-      // draw player sprite (centered)
-      ctx.drawImage(
-        playerSheet,
-        frame * TILE_SIZE, 0, TILE_SIZE, TILE_SIZE,
-        player.x - TILE_SIZE / 2,
-        player.y - TILE_SIZE / 2,
-        TILE_SIZE,
-        TILE_SIZE
-      );
-    }
+    // draw player animation
+    const pf = Math.floor(ts/150)%4;
+    ctx.drawImage(
+      playerSheet,
+      pf*TILE_SIZE,0,TILE_SIZE,TILE_SIZE,
+      player.x - TILE_SIZE/2, player.y - TILE_SIZE/2,
+      TILE_SIZE, TILE_SIZE
+    );
 
-    // Animation loop
-    function loop(ts) {
-      const frame = Math.floor(ts / 150) % 4;
-      drawScene(frame);
-      requestAnimationFrame(loop);
-    }
-    requestAnimationFrame(loop);
+    requestAnimationFrame(draw);
+  }
 
-    // Handle arrow-key movement
-    window.addEventListener('keydown', e => {
-      const step = TILE_SIZE;
-      if (e.key === 'ArrowUp')    player.y -= step;
-      else if (e.key === 'ArrowDown')  player.y += step;
-      else if (e.key === 'ArrowLeft')  player.x -= step;
-      else if (e.key === 'ArrowRight') player.x += step;
-      // clamp to bounds
-      player.x = Math.max(step/2, Math.min(canvas.width - step/2, player.x));
-      player.y = Math.max(step/2, Math.min(canvas.height - step/2, player.y));
-    });
+  window.addEventListener('keydown', e=>{
+    const S = TILE_SIZE;
+    if(e.key==='ArrowUp')    player.y -= S;
+    else if(e.key==='ArrowDown')  player.y += S;
+    else if(e.key==='ArrowLeft')  player.x -= S;
+    else if(e.key==='ArrowRight') player.x += S;
+    // clamp
+    player.x = Math.max(S/2, Math.min(W-S/2, player.x));
+    player.y = Math.max(S/2, Math.min(H-S/2, player.y));
+  });
+
+  // kick off
+  requestAnimationFrame(draw);
   </script>
 </body>
 </html>
