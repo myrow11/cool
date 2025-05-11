@@ -95,4 +95,295 @@
         m.tiles.forEach((row,y)=>{
           row.forEach((id,x)=>{
             let c = id===1? '#8FBC8F' : id===2? '#555' : id===3? '#8B4513' : '#000';
-            this.ctx.fillStyle
+            this.ctx.fillStyle=c;
+            this.ctx.fillRect(x*this.ts,y*this.ts,this.ts,this.ts);
+          })
+        });
+      }
+      getTileIdAt(px,py){
+        const tx=Math.floor(px/this.ts), ty=Math.floor(py/this.ts);
+        if(!this.map||tx<0||ty<0||tx>=this.map.width||ty>=this.map.height) return null;
+        return this.map.tiles[ty][tx];
+      }
+      isBlocked(px,py){ const id=this.getTileIdAt(px,py); return id===2; }
+      getTrigger(px,py){
+        const tx=Math.floor(px/this.ts), ty=Math.floor(py/this.ts),
+              key=`${tx},${ty}`;
+        return (this.doors[this.room]||{})[key]||null;
+      }
+    }
+
+    // ───────── PATHFINDING & NPCs ─────────
+    class Pathfinder {
+      constructor(map,b){this.w=map.width;this.h=map.height;this.t=map.tiles;this.b=b}
+      findPath(s,e){
+        const ser=o=>o.x+','+o.y,
+              ib=o=>o.x>=0&&o.y>=0&&o.x<this.w&&o.y<this.h,
+              walk=o=>{const id=this.t[o.y][o.x];return id!=null&&!this.b(id)},
+              neigh=o=>[{x:o.x+1,y:o.y},{x:o.x-1,y:o.y},{x:o.x,y:o.y+1},{x:o.x,y:o.y-1}]
+                       .filter(ib).filter(walk),
+              h=o=>Math.abs(o.x-e.x)+Math.abs(o.y-e.y);
+        let open=new Set([ser(s)]), came={}, g={ [ser(s)]:0 }, f={ [ser(s)]:h(s) };
+        while(open.size){
+          let ck, cf=Infinity;
+          for(let k of open) if((f[k]||Infinity)<cf){cf=f[k];ck=k;}
+          const [cx,cy]=ck.split(',').map(Number), cur={x:cx,y:cy};
+          if(cx===e.x&&cy===e.y){
+            const path=[]; let k=ck;
+            while(k!==ser(s)){const [px,py]=k.split(',').map(Number);path.push({x:px,y:py});k=came[k];}
+            return path.reverse();
+          }
+          open.delete(ck);
+          neigh(cur).forEach(n=>{
+            const nk=ser(n), tg=(g[ck]||0)+1;
+            if(tg<(g[nk]||Infinity)){
+              came[nk]=ck; g[nk]=tg; f[nk]=tg+h(n); open.add(nk);
+            }
+          });
+        }
+        return [];
+      }
+    }
+    class NPC {
+      constructor(name,st,color){ this.name=name; this.tileX=st.x; this.tileY=st.y; this.color=color; this.path=[]; this.target=null; }
+      choose(m){ this.target={x:Math.floor(Math.random()*m.width),y:Math.floor(Math.random()*m.height)}; }
+      update(m){ if(!this.path.length){ this.choose(m); this.path=new Pathfinder(m, id=>id===2).findPath({x:this.tileX,y:this.tileY},this.target);} 
+                  if(this.path.length){const n=this.path.shift();this.tileX=n.x;this.tileY=n.y;} }
+      draw(ctx,ts){ctx.fillStyle=this.color;ctx.fillRect(this.tileX*ts+ts*0.1,this.tileY*ts+ts*0.1,ts*0.8,ts*0.8);}
+    }
+
+    // ───────── DIALOGUE & QUEST ─────────
+    const DIALOGUES = {
+      elder:{ start:{text:"Greetings! Help us find the Gem?",choices:[{text:"Yes",next:"accept"},{text:"No",next:"decline"}]},
+              accept:{text:"Thank you! Seek the Gem in the cave.",choices:[{text:"Onward",next:null}]},
+              decline:{text:"Safe travels.",choices:[]} }
+    };
+    const QUESTS = {
+      findGem:{ title:"Find the Gem",status:"inactive", objectives:[{id:"gem",x:12,y:8,desc:"Locate Gem",done:false}] }
+    };
+
+    class DialogueManager {
+      constructor(){
+        this.box=document.getElementById('dialogueBox');
+        this.textEl=document.getElementById('dialogueText');
+        this.choicesEl=document.getElementById('choiceList');
+        this.onKey=this._onKey.bind(this);
+      }
+      start(npc){
+        this.data=DIALOGUES[npc]; this.node='start';
+        this.box.style.display='block'; this.render();
+        window.addEventListener('keydown',this.onKey);
+      }
+      render(){
+        const n=this.data[this.node];
+        this.textEl.textContent=n.text;
+        this.choicesEl.innerHTML='';
+        n.choices.forEach((c,i)=>{const li=document.createElement('li');li.textContent=`${i+1}. ${c.text}`;this.choicesEl.appendChild(li);});
+      }
+      _onKey(e){
+        const idx=parseInt(e.key)-1, n=this.data[this.node];
+        if(!isNaN(idx)&&n.choices[idx]){
+          const nxt=n.choices[idx].next;
+          window.removeEventListener('keydown',this.onKey);
+          if(this.node==='start'&&idx===0) questManager.activate('findGem');
+          if(nxt){ this.node=nxt; this.render(); window.addEventListener('keydown',this.onKey);}
+          else this.box.style.display='none';
+        }
+      }
+    }
+    class QuestManager {
+      constructor(){ this.log=document.getElementById('questLog'); this.list=document.getElementById('questList'); }
+      activate(id){ const q=QUESTS[id]; if(q&&q.status==='inactive'){q.status='active';this.update();}}
+      complete(id,obj){ const q=QUESTS[id]; const o=q.objectives.find(x=>x.id===obj); if(o&&!o.done){o.done=true; if(q.objectives.every(x=>x.done))q.status='completed'; this.update();}}
+      update(){
+        this.list.innerHTML='';
+        Object.values(QUESTS).forEach(q=>{ if(q.status!=='inactive'){
+          const li=document.createElement('li'); li.textContent=`${q.status==='completed'?'✔':'*'} ${q.title}`; this.list.appendChild(li);
+          q.objectives.forEach(o=>{ const oli=document.createElement('li'); oli.textContent=`  [${o.done?'✔':' '}] ${o.desc}`; this.list.appendChild(oli); });
+        }}); 
+      }
+      toggle(){ this.log.style.display=this.log.style.display==='block'?'none':'block'; }
+    }
+
+    const dialogueManager = new DialogueManager();
+    const questManager    = new QuestManager();
+    window.addEventListener('keydown',e=>{ if(e.key==='q') questManager.toggle(); });
+
+    // ───────── BATTLE ─────────
+    class BattleManager {
+      constructor(){
+        this.player={hp:100,atk:20,def:5}; this.state='idle';
+        this.ui=document.getElementById('battleUI');
+        this.canvas=document.getElementById('battleCanvas');
+        this.ctx=this.canvas.getContext('2d');
+        this.menu=document.getElementById('menuOptions');
+        this.opts=['Attack','Defend','Item']; this.sel=0;
+        this._key=this._key.bind(this);
+      }
+      start(enemy){
+        this.enemy=enemy; this.state='player'; this.sel=0;
+        this.ui.style.display='flex'; this.updateMenu(); this.render();
+        window.addEventListener('keydown',this._key);
+      }
+      _end(){ window.removeEventListener('keydown',this._key); this.ui.style.display='none'; }
+      updateMenu(){
+        this.menu.querySelectorAll('li').forEach((li,i)=>li.textContent=(i===this.sel?'▶ ':'   ')+this.opts[i]);
+      }
+      _key(e){
+        if(this.state!=='player')return;
+        if(e.key==='ArrowUp'){ this.sel=(this.sel+3-1)%3; this.updateMenu(); }
+        if(e.key==='ArrowDown'){ this.sel=(this.sel+1)%3; this.updateMenu(); }
+        if(e.key==='Enter') this.playerAction(this.opts[this.sel]);
+      }
+      playerAction(c){
+        if(c==='Attack'){ const dmg=Math.max(this.player.atk-this.enemy.def,1); this.enemy.hp-=dmg; }
+        if(c==='Defend'){ this.player.def*=2; }
+        if(c==='Item'){ this.player.hp=Math.min(this.player.hp+30,100); }
+        this.state='enemy'; this.render();
+        setTimeout(()=>this.enemyTurn(),500);
+      }
+      enemyTurn(){
+        if(this.enemy.hp<=0){ this.state='won'; this.render(); return setTimeout(()=>this._end(),500); }
+        const dmg=Math.max(this.enemy.atk-this.player.def,1);
+        this.player.hp-=dmg; this.player.def/=(this.opts[this.sel]==='Defend'?2:1);
+        this.state=this.player.hp>0?'player':'lost'; this.render();
+        if(this.state!=='player') setTimeout(()=>this._end(),500);
+      }
+      render(){
+        const c=this.ctx; c.clearRect(0,0,512,384);
+        // enemy
+        c.fillStyle='darkred'; c.fillRect(300,100,128,128);
+        c.fillStyle='#fff'; c.fillText(`HP:${this.enemy.hp}`,300,240);
+        // player
+        c.fillStyle='crimson'; c.fillRect(80,200,128,128);
+        c.fillStyle='#fff'; c.fillText(`HP:${this.player.hp}`,80,360);
+      }
+    }
+    const battle = new BattleManager();
+    window.addEventListener('keydown',e=>{
+      if(e.key==='b' && battle.state==='idle') battle.start({hp:40,atk:10,def:2});
+    });
+
+    // ───────── DAY/NIGHT ─────────
+    class DayNight {
+      constructor(cycle){ this.dur=cycle; this.t=0; }
+      update(dt){ this.t=(this.t+dt)%this.dur; }
+      apply(ctx,canvas){
+        const half=this.dur/2, x=this.t<half?Math.sin((this.t/half)*Math.PI):Math.sin(((this.t-half)/half)*Math.PI);
+        ctx.fillStyle=`rgba(10,10,50,${(x*0.7).toFixed(3)})`;
+        ctx.fillRect(0,0,canvas.width,canvas.height);
+      }
+    }
+    const dayNight = new DayNight(120000);
+
+    // ───────── UTILS ─────────
+    function fadeOut(){ return new Promise(r=>{ fadeDiv.style.opacity=1; fadeDiv.addEventListener('transitionend',()=>r(),{once:true}); }); }
+    function fadeIn(){ return new Promise(r=>{ fadeDiv.style.opacity=0; fadeDiv.addEventListener('transitionend',()=>r(),{once:true}); }); }
+    function slideOut(){ return new Promise(r=>{ container.style.transform='translateX(-100%)'; container.addEventListener('transitionend',()=>r(),{once:true}); }); }
+    function slideIn(){ return new Promise(r=>{ container.style.transform='translateX(0)'; container.addEventListener('transitionend',()=>r(),{once:true}); }); }
+    function clamp(v,min,max){ return v<min?min:v>max?max:v; }
+
+    // ───────── MAIN ENGINE ─────────
+    (async function(){
+      const mapLoader = new MapLoader(TILE_SIZE,ctx, id=>id===2, DOOR_TRIGGERS);
+      let currentRoom='townSquare';
+      const player={ x:1.5*TILE_SIZE, y:1.5*TILE_SIZE, w:0.8*TILE_SIZE, h:0.8*TILE_SIZE, col:'crimson' };
+      const camera={ x:0,y:0 };
+      const npcs=[ new NPC('elder',{x:4,y:2},'gold'), new NPC('shopkeeper',{x:10,y:2},'teal') ];
+
+      async function loadRoom(room,spawn){
+        if(TRANSITION_TYPE==='fade') await fadeOut(); else await slideOut();
+        mapLoader.drawMap(MAPS[room],room);
+        currentRoom=room;
+        if(spawn){ player.x=spawn.x; player.y=spawn.y; }
+        camera.x=clamp(player.x-canvas.width/2,0,MAPS[room].width*TILE_SIZE-canvas.width);
+        camera.y=clamp(player.y-canvas.height/2,0,MAPS[room].height*TILE_SIZE-canvas.height);
+        render();
+        if(TRANSITION_TYPE==='fade') await fadeIn(); else await slideIn();
+      }
+
+      function tryMove(dx,dy){
+        const nx=player.x+dx, ny=player.y+dy, cx=nx+player.w/2, cy=ny+player.h/2;
+        if(mapLoader.isBlocked(cx,cy)) return;
+        player.x=nx; player.y=ny;
+        camera.x=clamp(player.x-canvas.width/2,0,mapLoader.map.width*TILE_SIZE-canvas.width);
+        camera.y=clamp(player.y-canvas.height/2,0,mapLoader.map.height*TILE_SIZE-canvas.height);
+        render();
+        // dialogue
+        npcs.forEach(npc=>{
+          const dx=Math.abs(npc.tileX*TILE_SIZE+TILE_SIZE/2-cx),
+                dy=Math.abs(npc.tileY*TILE_SIZE+TILE_SIZE/2-cy);
+          if(dx<TILE_SIZE&&dy<TILE_SIZE) dialogueManager.start(npc.name);
+        });
+        // quest obj
+        const tx=Math.floor(cx/TILE_SIZE), ty=Math.floor(cy/TILE_SIZE);
+        Object.entries(QUESTS).forEach(([qid,q])=>{
+          if(q.status==='active') q.objectives.forEach(o=>{
+            if(!o.done&&o.x===tx&&o.y===ty) questManager.complete(qid,o.id);
+          });
+        });
+        // door
+        const trg=mapLoader.getTrigger(cx,cy);
+        if(trg) loadRoom(trg.to,trg.spawn);
+      }
+
+      function render(){
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        ctx.save();
+        ctx.translate(-camera.x,-camera.y);
+        mapLoader.drawMap(mapLoader.map,currentRoom);
+        // quest markers
+        Object.values(QUESTS).forEach(q=>{
+          if(q.status==='active') q.objectives.forEach(o=>{
+            if(!o.done){
+              ctx.fillStyle='rgba(255,0,0,0.7)';
+              ctx.beginPath();
+              ctx.arc(o.x*TILE_SIZE+TILE_SIZE/2, o.y*TILE_SIZE+TILE_SIZE/2, TILE_SIZE/4, 0,2*Math.PI);
+              ctx.fill();
+            }
+          });
+        });
+        npcs.forEach(npc=>npc.draw(ctx,TILE_SIZE));
+        ctx.fillStyle=player.col;
+        ctx.fillRect(player.x,player.y,player.w,player.h);
+        ctx.restore();
+        dayNight.apply(ctx,canvas);
+      }
+
+      // fixed-timestep loop
+      let last=performance.now(), acc=0, showDebug=false;
+      window.addEventListener('keydown',e=>{
+        if(e.key==='~'){ showDebug=!showDebug;
+          let d=document.getElementById('debugInfo');
+          if(!d&&showDebug){ d=document.createElement('div'); d.id='debugInfo'; document.body.appendChild(d); }
+        }
+      });
+      function update(){
+        npcs.forEach(n=>n.update(mapLoader.map));
+        dayNight.update(STEP_MS);
+      }
+      function loop(ts){
+        const d=Math.min(ts-last,STEP_MS*4); last=ts; acc+=d;
+        while(acc>=STEP_MS){ update(); acc-=STEP_MS; }
+        render();
+        if(showDebug){
+          document.getElementById('debugInfo').textContent=
+            `FPS:${Math.round(1000/STEP_MS)} Room:${currentRoom}`;
+        }
+        requestAnimationFrame(loop);
+      }
+
+      await loadRoom(currentRoom,{x:player.x,y:player.y});
+      window.addEventListener('keydown',e=>{
+        if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)){
+          const m={ArrowUp:[0,-TILE_SIZE],ArrowDown:[0,TILE_SIZE],
+                   ArrowLeft:[-TILE_SIZE,0],ArrowRight:[TILE_SIZE,0]}[e.key];
+          tryMove(...m);
+        }
+      });
+      requestAnimationFrame(loop);
+    })();
+  })();
+  </script>
+</body>
+</html>
