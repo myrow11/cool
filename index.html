@@ -3,144 +3,358 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>NeoCity: Rogue AI – Ultimate Cyberpunk</title>
+  <title>NeoCity: Rogue AI – Street Edition</title>
   <style>
-    html, body { margin: 0; padding: 0; overflow: hidden; background: #000; color: #fff; font: 14px monospace; }
-    #gameCanvas { display: block; margin: 0 auto; background: #000; position: relative; z-index: 1; }
-    body::after {
-      content: ''; pointer-events: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: radial-gradient(circle at center, rgba(0,0,0,0) 50%, rgba(0,0,0,0.5) 100%);
-      mix-blend-mode: multiply; z-index: 5;
-    }
-    body::before {
-      content: ''; pointer-events: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-      background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0px, rgba(0,0,0,0.05) 1px);
-      mix-blend-mode: overlay; opacity: 0.3; z-index: 4;
-    }
+    html,body{margin:0;padding:0;overflow:hidden;background:#000;color:#0ff;font:14px monospace;}
+    #gameCanvas{display:block;margin:0 auto;position:relative;z-index:1;}
+    body::after, body::before{content:'';pointer-events:none;position:fixed;top:0;left:0;width:100%;height:100%;}
+    body::after{background:radial-gradient(circle at center,rgba(0,0,0,0)50%,rgba(0,0,0,0.5)100%),linear-gradient(45deg,rgba(102,0,255,0.05),rgba(0,255,255,0.05));mix-blend-mode:multiply;z-index:5;}
+    body::before{background:repeating-linear-gradient(to bottom,rgba(0,0,0,0)0,rgba(0,0,0,0.05)1px);mix-blend-mode:overlay;opacity:0.3;z-index:4;}
+    .panel{position:absolute;background:rgba(0,0,0,0.8);border:2px solid #0ff;border-radius:8px;padding:8px;display:none;z-index:10;}
+    .choice{display:inline-block;margin:4px;padding:6px 12px;background:#111;border:2px inset #444;color:#0ff;cursor:pointer;user-select:none;}
+    .choice:hover{background:#222;border-color:#0ff;}
+    #dialoguePanel{bottom:10%;left:50%;transform:translateX(-50%);width:60%;display:flex;}
+    #portrait{width:64px;height:64px;margin-right:8px;border:1px solid #0ff;border-radius:4px;}
+    #hud{position:absolute;top:10px;left:10px;z-index:6;}
+    #skillPanel{top:50%;left:50%;transform:translate(-50%,-50%);width:60%;height:60%;overflow:auto;}
   </style>
 </head>
 <body>
   <canvas id="gameCanvas" width="800" height="600" tabindex="0"></canvas>
-  <script>
-(() => {
-  // ───────── CONSTANTS ─────────
-  const VIEW_W = 800, VIEW_H = 600;
-  const TILE = 32, MAP_C = 50, MAP_R = 32;
-  const WORLD_W = MAP_C * TILE, WORLD_H = MAP_R * TILE;
 
-  // ───────── CANVASES ─────────
-  const canvas = document.getElementById('gameCanvas'),
-        ctx = canvas.getContext('2d');
-  const staticCanvas = document.createElement('canvas');
-  staticCanvas.width = WORLD_W;
-  staticCanvas.height = WORLD_H;
-  const staticCtx = staticCanvas.getContext('2d');
+  <!-- Dialogue Panel -->
+  <div id="dialoguePanel" class="panel">
+    <img id="portrait" src="" alt="Portrait"/>
+    <div>
+      <div id="dialogueText"></div>
+      <div id="choiceList"></div>
+    </div>
+  </div>
+
+  <!-- HUD -->
+  <div id="hud">
+    Rep: <span id="rep">0</span>
+    <span class="choice" id="skillBtn">Skills</span>
+  </div>
+
+  <!-- Skill Tree -->
+  <div id="skillPanel" class="panel">
+    <h3>Skill Tree</h3>
+    <ul id="skillList"></ul>
+    <span class="choice" id="closeSkill">Close</span>
+  </div>
+
+<script>
+(function(){
+  // ───────── CONSTS ─────────
+  const VIEW_W=800,VIEW_H=600,TILE=32,MAP_C=50,MAP_R=32;
+  const WORLD_W=MAP_C*TILE,WORLD_H=MAP_R*TILE;
+  const CHUNK_W=10,CHUNK_H=8;
+
+  // ───────── CANVAS ─────────
+  const canvas=document.getElementById('gameCanvas'),ctx=canvas.getContext('2d');
+  const off=document.createElement('canvas'),octx=off.getContext('2d');
+  off.width=VIEW_W;off.height=VIEW_H;
+  const sky=document.createElement('canvas'),sctx=sky.getContext('2d');
+  sky.width=VIEW_W;sky.height=VIEW_H;
 
   // ───────── STATE ─────────
-  let player = { x: 5 * TILE, y: 5 * TILE };
-  let keys = {}, rainDrops = [];
-  let dayTime = 0;
+  let player, ambientNPCs=[], keyNPCs=[], zone, tileset;
+  let keys={},t=0,rain=[],city=0,rep=0,skillPts=0;
+  let repDirty=true,dialogOpen=false;
+  const skills=[
+    {name:'Wallhack',cost:2,unlocked:false},
+    {name:'Double Jump',cost:3,unlocked:false},
+    {name:'EMP Burst',cost:5,unlocked:false}
+  ];
 
-  // ───────── TILEMAP ─────────
-  function drawStaticMap() {
-    const pal = { floor: "#222", wall: "#111", water: "#004", building: "#444" };
-    for (let y = 0; y < MAP_R; y++) {
-      for (let x = 0; x < MAP_C; x++) {
-        staticCtx.fillStyle = pal.floor;
-        staticCtx.fillRect(x * TILE, y * TILE, TILE, TILE);
-        if (Math.random() < 0.1) {
-          staticCtx.fillStyle = pal.building;
-          staticCtx.fillRect(x * TILE, y * TILE, TILE, TILE);
-        }
+  // ───────── DIALOGUE DATA ─────────
+  function adjRep(a){ rep=Math.max(-10,Math.min(10,rep+a)); repDirty=true; }
+  const DIALOGUE = {
+    thug1: { t:`"Viper": Stay out of my turf."`, c:[{ t:"(nod)", n:null }] },
+    ally1: { t:`"Echo": I’m covering you."`,      c:[{ t:"Thanks",  n:null }] },
+    civilian:{ t:`"Bystander": Ugh, this rain…"`, c:[{ t:"Stay safe.",n:null }] }
+  };
+
+  // ───────── PORTRAITS ─────────
+  function makeP(skin,hair){
+    const c=document.createElement('canvas'),g=c.getContext('2d');
+    c.width=c.height=64;
+    g.fillStyle=skin;g.beginPath();g.arc(32,24,16,0,2*Math.PI);g.fill();
+    g.fillStyle=hair;g.fillRect(16,8,32,8);
+    g.fillStyle='#000';g.fillRect(20,24,8,8);g.fillRect(36,24,8,8);
+    g.fillRect(24,40,16,4);
+    return c.toDataURL();
+  }
+  const PORTRAITS = {
+    thug1:makeP('#c68642','#300'),
+    ally1:makeP('#ffdbac','#0cf'),
+    civilian:makeP('#888','#444')
+  };
+
+  // ───────── AUDIO ─────────
+  const aCtx=new (AudioContext||webkitAudioContext)();
+  function clickSFX(){
+    const o=aCtx.createOscillator(),g=aCtx.createGain();
+    o.type='square';o.frequency.value=800;g.gain.value=0.02;
+    o.connect(g).connect(aCtx.destination);o.start();o.stop(aCtx.currentTime+0.03);
+  }
+
+  // ───────── INPUT ─────────
+  canvas.addEventListener('keydown',e=>keys[e.key]=true);
+  canvas.addEventListener('keyup',  e=>keys[e.key]=false);
+  canvas.focus();
+
+  // ───────── TILESET & STREET initZone() ─────────
+  function genTileset(){
+    const c=document.createElement('canvas'),g=c.getContext('2d');
+    c.width=7*TILE;c.height=TILE;
+    const pal={floor:'#222',wall:'#111',door:'#880',water:'#004',building:'#444'};
+    ['floor','wall','door'].forEach((t,i)=>{g.fillStyle=pal[t];g.fillRect(i*TILE,0,TILE,TILE);});
+    for(let wf=0;wf<2;wf++){
+      const x0=(3+wf)*TILE;
+      g.fillStyle=pal.water;g.fillRect(x0,0,TILE,TILE);
+      g.strokeStyle='rgba(255,255,255,0.5)';g.lineWidth=2;g.beginPath();
+      for(let y=-1;y<=TILE;y+=8){
+        g.moveTo(x0-4,y+wf*4);
+        g.quadraticCurveTo(x0+TILE/2,y+4+wf*4,x0+TILE+4,y+wf*4);
+      }
+      g.stroke();
+    }
+    // building
+    g.fillStyle=pal.building;g.fillRect(5*TILE,0,TILE,TILE);
+    g.fillStyle='rgba(200,200,100,0.6)';
+    for(let y=4;y<TILE-4;y+=6)for(let x=4;x<TILE-4;x+=6)g.fillRect(5*TILE+x,y,3,3);
+    // conveyor
+    g.fillStyle='#666';g.fillRect(6*TILE,0,TILE,TILE);
+    g.fillStyle='#999';g.fillRect(6*TILE,TILE/2-2,TILE,4);
+    return c;
+  }
+
+  function initZone(){
+    // start all as buildings (5)
+    const m=Array(MAP_R).fill().map(()=>Array(MAP_C).fill(5));
+    // boundary walls (1)
+    for(let x=0;x<MAP_C;x++){m[0][x]=1;m[MAP_R-1][x]=1;}
+    for(let y=0;y<MAP_R;y++){m[y][0]=1;m[y][MAP_C-1]=1;}
+    // street center
+    const ry=~~(MAP_R/2), rw=3, sw=1;
+    for(let y=ry-~~(rw/2);y<=ry+~~(rw/2);y++)
+      for(let x=1;x<MAP_C-1;x++) m[y][x]=0;
+    for(let y=ry-~~(rw/2)-sw;y<=ry+~~(rw/2)+sw;y+=rw+2*sw)
+      for(let x=1;x<MAP_C-1;x++) m[y][x]=0;
+    // doors (2)
+    for(let x=3;x<MAP_C-3;x+=8){
+      m[ry-~~(rw/2)-sw-1][x]=2;
+      m[ry+~~(rw/2)+sw+1][x+4]=2;
+    }
+    tileset=genTileset();
+    zone={map:m,tileset};
+  }
+
+  function drawChunks(vx,vy){
+    for(let cy=0;cy<MAP_R;cy+=CHUNK_H)for(let cx=0;cx<MAP_C;cx+=CHUNK_W){
+      const px=cx*TILE,py=cy*TILE;
+      if(px+CHUNK_W*TILE<vx||py+CHUNK_H*TILE<vy||px>vx+VIEW_W||py>vy+VIEW_H)continue;
+      for(let y=cy;y<cy+CHUNK_H;y++)for(let x=cx;x<cx+CHUNK_W;x++){
+        const id=zone.map[y][x], fx=(id===3)?3+~~(t/500)%2:id;
+        octx.drawImage(tileset,fx*TILE,0,TILE,TILE,x*TILE,y*TILE,TILE,TILE);
       }
     }
   }
 
   // ───────── WEATHER ─────────
-  function initWeather() {
-    rainDrops = Array.from({ length: 200 }, () => ({
-      x: Math.random() * VIEW_W,
-      y: Math.random() * VIEW_H,
-      vy: 2 + Math.random() * 2,
-      alpha: 0.2 + Math.random() * 0.3,
-    }));
+  function initRain(){rain=[];for(let i=0;i<200;i++)rain.push({x:Math.random()*WORLD_W,y:Math.random()*WORLD_H});}
+  function updRain(){rain.forEach(r=>{r.y+=2;if(r.y>WORLD_H)r.y=0;});}
+  function drawRain(){octx.save();octx.strokeStyle='rgba(0,200,200,0.2)';octx.lineWidth=1;
+    rain.forEach(r=>{octx.beginPath();octx.moveTo(r.x,r.y);octx.lineTo(r.x+2,r.y+10);octx.stroke();});octx.restore();
   }
 
-  function updateWeather(dt) {
-    rainDrops.forEach(r => {
-      r.y += r.vy * dt / 16;
-      if (r.y > VIEW_H) r.y = 0;
-    });
+  // ───────── PARALLAX & GRID ─────────
+  function drawParallax(){
+    city=(city+0.2)%VIEW_W;
+    sctx.clearRect(0,0,VIEW_W,VIEW_H);
+    sctx.fillStyle='rgba(255,0,255,0.1)';
+    for(let i=0;i<20;i++)sctx.fillRect(i*VIEW_W/20,VIEW_H*0.6,VIEW_W/30,VIEW_H*0.4);
+    ctx.drawImage(sky,-city,0);
+    ctx.drawImage(sky,VIEW_W-city,0);
   }
-
-  function drawWeather() {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(0,200,200,0.2)';
-    rainDrops.forEach(r => {
-      ctx.globalAlpha = r.alpha;
-      ctx.beginPath();
-      ctx.moveTo(r.x, r.y);
-      ctx.lineTo(r.x, r.y + 10);
-      ctx.stroke();
-    });
-    ctx.restore();
-  }
-
-  // ───────── PARALLAX BACKGROUND ─────────
-  let cityOffset = 0;
-  function drawParallax() {
-    cityOffset = (cityOffset + 0.1) % VIEW_W;
-    ctx.save();
-    ctx.translate(-cityOffset, 0);
-    ctx.fillStyle = 'rgba(50,50,70,0.2)';
-    for (let i = 0; i < 20; i++) {
-      ctx.fillRect(i * VIEW_W / 20, VIEW_H * 0.6, VIEW_W / 30, VIEW_H * 0.4);
+  function drawGrid(){
+    octx.save();octx.strokeStyle='rgba(255,0,255,0.15)';octx.lineWidth=1;
+    for(let x=0;x<WORLD_W;x+=TILE*5){
+      const sx=(x+city*0.5)%VIEW_W;
+      octx.beginPath();octx.moveTo(sx,0);octx.lineTo(sx,VIEW_H);octx.stroke();
     }
-    ctx.translate(VIEW_W, 0);
-    for (let i = 0; i < 20; i++) {
-      ctx.fillRect(i * VIEW_W / 20, VIEW_H * 0.6, VIEW_W / 30, VIEW_H * 0.4);
+    for(let y=0;y<WORLD_H;y+=TILE*5){
+      const sy=(y+city*0.3)%VIEW_H;
+      octx.beginPath();octx.moveTo(0,sy);octx.lineTo(VIEW_W,sy);octx.stroke();
     }
-    ctx.restore();
+    octx.restore();
   }
 
-  // ───────── INPUT ─────────
-  canvas.addEventListener('keydown', e => keys[e.key] = true);
-  canvas.addEventListener('keyup', e => keys[e.key] = false);
+  // ───────── DIALOGUE UI ─────────
+  const dlgP=document.getElementById('dialoguePanel'),
+        dlgT=document.getElementById('dialogueText'),
+        dlgL=document.getElementById('choiceList'),
+        portraitEl=document.getElementById('portrait');
 
-  function updateInput(dt) {
-    const speed = 150 * dt / 1000;
-    if (keys['ArrowUp']) player.y -= speed;
-    if (keys['ArrowDown']) player.y += speed;
-    if (keys['ArrowLeft']) player.x -= speed;
-    if (keys['ArrowRight']) player.x += speed;
+  function showDialogue(id){
+    dialogOpen=true;
+    const node=DIALOGUE[id]||DIALOGUE['civilian'];
+    portraitEl.src=PORTRAITS[id]||PORTRAITS['civilian'];
+    dlgT.innerText=node.t; dlgL.innerHTML='';
+    node.c.forEach((ch,i)=>{ 
+      const b=document.createElement('div'); 
+      b.className='choice'; b.innerText=`${i+1}. ${ch.t}`;
+      b.onclick=()=>{
+        clickSFX();
+        dlgP.style.display='none'; dialogOpen=false;
+        if(ch.n) showDialogue(ch.n);
+        if(ch.effect) ch.effect();
+      };
+      dlgL.appendChild(b);
+    });
+    dlgP.style.display='block';
+  }
+
+  // ───────── ENTITIES ─────────
+  async function initEnt(){
+    player={x:5*TILE,y:5*TILE,sheet:await genSprite('#f44','#000','#ffdbac')};
+    ambientNPCs=[];for(let i=0;i<8;i++){
+      ambientNPCs.push({
+        x:(2+~~(Math.random()*(MAP_C-4)))*TILE,
+        y:(2+~~(Math.random()*(MAP_R-4)))*TILE,
+        sheet:await genSprite('#888','#444','#888'),
+        timer:0,dir:0
+      });
+    }
+    keyNPCs=[{id:'thug1',pts:[{x:10,y:6},{x:20,y:6},{x:20,y:12},{x:10,y:12}],x:10*TILE,y:6*TILE,sheet:await genSprite('#d22','#300','#c68642')}];
+  }
+  function updateAmb(d){ambientNPCs.forEach(n=>{n.timer-=d;if(n.timer<=0){n.timer=1e3+Math.random()*2e3;n.dir=~~(Math.random()*4);}const s=30*d/1e3;if(n.dir===0)n.y-=s;if(n.dir===1)n.x+=s;if(n.dir===2)n.y+=s;if(n.dir===3)n.x-=s;});}
+  function updateKey(d){keyNPCs.forEach(n=>{ if(!n.pts)return; if(!n.path)n.pathIdx=0,n.path=[]; if(!n.path.length){const tgt=n.pts[n.pathIdx];n.path=findPath(zone.map,{x:~~(n.x/TILE),y:~~(n.y/TILE)},tgt);n.pathIdx=(n.pathIdx+1)%n.pts.length;} if(n.path.length){const t=n.path.shift();n.x=t.x*TILE;n.y=t.y*TILE;} });}
+  function updateInp(d){
+    if(dialogOpen)return;
+    const s=150*d/1e3;
+    if(keys['ArrowUp'])player.y-=s;
+    if(keys['ArrowDown'])player.y+=s;
+    if(keys['ArrowLeft'])player.x-=s;
+    if(keys['ArrowRight'])player.x+=s;
+    if(keys['e']){
+      [...ambientNPCs,...keyNPCs].forEach(n=>{
+        if(Math.hypot(player.x-n.x,player.y-n.y)<TILE){
+          showDialogue(n.id||'civilian');
+          keys['e']=false;
+        }
+      });
+    }
+  }
+
+  // ───────── SPRITE GEN ─────────
+  async function genSprite(body,hair,skin){
+    const dirs=8,frm=4,s=TILE;
+    const c=document.createElement('canvas'),g=c.getContext('2d');
+    c.width=s*frm; c.height=s*dirs;
+    for(let d=0;d<dirs;d++)for(let f=0;f<frm;f++){
+      const x0=f*s,y0=d*s,o=(f%2?2:-2);
+      g.fillStyle=body;g.fillRect(x0+6,y0+8,s-12,s-16);
+      g.fillStyle=skin;g.fillRect(x0+10,y0+4,s-20,s-16);
+      g.fillStyle=hair;g.fillRect(x0+8,y0+2,s-16,4);
+      g.fillRect(x0+6,y0+2,4,8);g.fillRect(x0+s-10,y0+2,4,8);
+      g.fillStyle=body;
+      g.fillRect(x0+8+Math.cos(d/dirs*2*Math.PI)*2,y0+24+o+Math.sin(d/dirs*2*Math.PI)*2,4,8);
+      g.fillRect(x0+20+Math.cos((d+4)/dirs*2*Math.PI)*2,y0+24-o+Math.sin((d+4)/dirs*2*Math.PI)*2,4,8);
+    }
+    return new Promise(r=>{const img=new Image();img.onload=r;img.src=c.toDataURL();});
+  }
+
+  // ───────── PATHFIND ─────────
+  function findPath(g,s,go){
+    const key=p=>p.x+','+p.y,h=p=>Math.abs(p.x-go.x)+Math.abs(p.y-go.y);
+    let open=new Set([key(s)]),came={},gS={[key(s)]:0},fS={[key(s)]:h(s)};
+    while(open.size){
+      let cur,b=1e9;
+      open.forEach(k=>{if(fS[k]<b){b=fS[k];cur=k;}});
+      const [cx,cy]=cur.split(',').map(Number);
+      if(cx===go.x&&cy===go.y){
+        let path=[],c=cur;
+        while(c!==key(s)){const [px,py]=c.split(',').map(Number);path.unshift({x:px,y:py});c=came[c];}
+        return path;
+      }
+      open.delete(cur);
+      [[1,0],[-1,0],[0,1],[0,-1]].forEach(d=>{
+        const nx=cx+d[0],ny=cy+d[1];
+        if(nx<0||ny<0||nx>=MAP_C||ny>=MAP_R)return;
+        const id=g[ny][nx];if(id>=1&&id<=5)return;
+        const nk=`${nx},${ny}`,tg=gS[cur]+1;
+        if(tg<(gS[nk]||1e9)){came[nk]=cur;gS[nk]=tg;fS[nk]=tg+h({x:nx,y:ny});open.add(nk);}
+      });
+    }
+    return [];
   }
 
   // ───────── MAIN LOOP ─────────
-  function mainLoop(ts) {
-    const dt = 16;
-    dayTime = ts;
+  let glitch=0;
+  function applyGlitch(d){
+    glitch-=d;
+    if(glitch<=0){
+      glitch=3000+Math.random()*5000;
+      const of=(Math.random()*6|0)-3;
+      canvas.style.transform=`translateX(${of}px)`;
+      setTimeout(()=>canvas.style.transform='',50);
+    }
+  }
+  function loop(ts){
+    t=ts;
+    const d=16;
+    if(dialogOpen===false){
+      updateAmb(d);
+      updateKey(d);
+      updateInp(d);
+    }
+    updRain();
 
-    // Update
-    updateInput(dt);
-    updateWeather(dt);
+    // camera
+    const cx=Math.min(0,Math.max(VIEW_W/2-player.x,VIEW_W-WORLD_W)),
+          cy=Math.min(0,Math.max(VIEW_H/2-player.y,VIEW_H-WORLD_H));
 
-    // Draw
-    ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+    // render
     drawParallax();
-    ctx.drawImage(staticCanvas, 0, 0);
-    drawWeather();
+    octx.setTransform(1,0,0,1,cx,cy);
+    octx.clearRect(0,0,VIEW_W,VIEW_H);
+    drawChunks(-cx,-cy);
+    drawGrid();
+    drawRain();
 
-    requestAnimationFrame(mainLoop);
+    // shadows
+    octx.save();octx.globalCompositeOperation='destination-over';octx.fillStyle='rgba(0,0,0,0.5)';
+    [...ambientNPCs,...keyNPCs,{x:player.x,y:player.y}].forEach(e=>{
+      octx.beginPath();
+      octx.ellipse(e.x,e.y+TILE/2,TILE/2,TILE/4,0,0,2*Math.PI);
+      octx.fill();
+    });
+    octx.restore();
+
+    // sprites
+    ambientNPCs.forEach(n=>{const f=~~(t/200)%4;octx.drawImage(n.sheet,f*TILE,0,TILE,TILE,n.x-TILE/2,n.y-TILE/2,TILE,TILE);});
+    keyNPCs.forEach(n=>{const f=~~(t/200)%4;octx.drawImage(n.sheet,f*TILE,0,TILE,TILE,n.x-TILE/2,n.y-TILE/2,TILE,TILE);});
+    const pf=~~(t/150)%4;octx.drawImage(player.sheet,pf*TILE,0,TILE,TILE,player.x-TILE/2,player.y-TILE/2,TILE,TILE);
+
+    // final blit
+    ctx.clearRect(0,0,VIEW_W,VIEW_H);
+    ctx.drawImage(off,0,0);
+
+    if(repDirty){document.getElementById('rep').innerText=rep;repDirty=false;}
+    applyGlitch(d);
+
+    requestAnimationFrame(loop);
   }
 
   // ───────── BOOTSTRAP ─────────
-  function initAll() {
-    drawStaticMap();
-    initWeather();
-    requestAnimationFrame(mainLoop);
-  }
-  initAll();
+  initZone();
+  initRain();
+  initEnt().then(()=>requestAnimationFrame(loop));
+
 })();
-  </script>
+</script>
 </body>
 </html>
