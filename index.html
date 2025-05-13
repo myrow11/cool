@@ -5,10 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>NeoCity RPG – Rendering Core Debug</title>
   <style>
-    /*──────────────────── GLOBAL/STYLES ────────────────────*/
     html, body { margin:0; padding:0; background:#000; overflow:hidden; }
     #gameCanvas { display:block; margin:0 auto; background:#000; }
-    /* Neon vignette & scanlines */
     body::after, body::before {
       content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none;
     }
@@ -19,16 +17,14 @@
       mix-blend-mode:multiply; z-index:5;
     }
     body::before {
-      background:repeating-linear-gradient(to bottom, rgba(0,0,0,0)0px, rgba(0,0,0,0.05)1px);
+      background:repeating-linear-gradient(to bottom, rgba(0,0,0,0)0, rgba(0,0,0,0.05)1px);
       mix-blend-mode:overlay; opacity:0.3; z-index:4;
     }
   </style>
 </head>
 <body>
-  <!-- Main Game Canvas -->
   <canvas id="gameCanvas" width="960" height="640"></canvas>
 
-  <!-- Rendering Core Debug Script -->
   <script>
   (() => {
     //──── CONFIG ────
@@ -47,7 +43,6 @@
     window.addEventListener('load', init);
 
     function init() {
-      console.log("⮞ init()");
       canvas = document.getElementById('gameCanvas');
       if (!canvas) return console.error("Canvas not found");
       ctx = canvas.getContext('2d');
@@ -67,12 +62,11 @@
     }
 
     function generateSkyline() {
-      console.log("⮞ generateSkyline()");
       skyCtx.fillStyle = 'rgba(50,50,70,0.2)';
       for (let i = 0; i < 25; i++) {
-        const w = 60 + Math.random()*80;
-        const h = 100 + Math.random()*150;
-        skyCtx.fillRect(i*(WIDTH/25), HEIGHT - h - 50, w, h);
+        const w = 60 + Math.random() * 80;
+        const h = 100 + Math.random() * 150;
+        skyCtx.fillRect(i * (WIDTH / 25), HEIGHT - h - 50, w, h);
       }
       console.log("✅ Skyline generated");
     }
@@ -92,25 +86,25 @@
       octx.setTransform(1,0,0,1,0,0);
       octx.clearRect(0,0,WIDTH,HEIGHT);
 
-      // 1) Parallax skyline
-      cityOffset = (cityOffset + dt*0.02) % WIDTH;
-      octx.drawImage(skyCanvas, -cityOffset, 0);
-      octx.drawImage(skyCanvas, WIDTH - cityOffset, 0);
-
-      // 2) Floor (placeholder)
+      // 1) Floor (placeholder)
       octx.fillStyle = '#111';
       octx.fillRect(0, 0, WIDTH, HEIGHT);
+
+      // 2) Parallax skyline
+      cityOffset = (cityOffset + dt * 0.02) % WIDTH;
+      octx.drawImage(skyCanvas, -cityOffset, 0);
+      octx.drawImage(skyCanvas, WIDTH - cityOffset, 0);
 
       // 3) Neon grid overlay
       octx.save();
       octx.strokeStyle = 'rgba(255,0,255,0.15)';
       octx.lineWidth = 1;
-      for (let x = 0; x <= WORLD_W; x += TILE*5) {
-        const sx = (x + cityOffset*0.5) % WIDTH;
+      for (let x = 0; x <= WORLD_W; x += TILE * 5) {
+        const sx = (x + cityOffset * 0.5) % WIDTH;
         octx.beginPath(); octx.moveTo(sx, 0); octx.lineTo(sx, HEIGHT); octx.stroke();
       }
-      for (let y = 0; y <= WORLD_H; y += TILE*5) {
-        const sy = (y + cityOffset*0.3) % HEIGHT;
+      for (let y = 0; y <= WORLD_H; y += TILE * 5) {
+        const sy = (y + cityOffset * 0.3) % HEIGHT;
         octx.beginPath(); octx.moveTo(0, sy); octx.lineTo(WIDTH, sy); octx.stroke();
       }
       octx.restore();
