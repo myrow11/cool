@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>NeoCity RPG – Rendering Core Debug</title>
+  <title>NeoCity RPG – Tilemap Integration</title>
   <style>
     html, body { margin:0; padding:0; background:#000; overflow:hidden; }
     #gameCanvas { display:block; margin:0 auto; background:#000; }
+    /* Neon vignette & scanlines */
     body::after, body::before {
       content:''; position:fixed; top:0; left:0; width:100%; height:100%; pointer-events:none;
     }
@@ -28,16 +29,16 @@
   <script>
   (() => {
     //──── CONFIG ────
-    const WIDTH  = 960, HEIGHT = 640;
-    const TILE   = 32, MAP_C = 60, MAP_R = 40;
+    const WIDTH   = 960,  HEIGHT  = 640;
+    const TILE    = 32,   MAP_C   = 60, MAP_R = 40;
     const WORLD_W = MAP_C * TILE, WORLD_H = MAP_R * TILE;
+    const CHUNK_W = 10,   CHUNK_H = 8;  // chunk size for rendering
 
     //──── STATE ────
-    let canvas, ctx;
-    let offscreen, octx;
+    let canvas, ctx, offscreen, octx;
     let skyCanvas, skyCtx;
+    let tileset, zone;
     let lastTs = 0, cityOffset = 0;
-    let frameCount = 0, fpsTime = 0;
 
     //──── BOOT ────
     window.addEventListener('load', init);
@@ -46,76 +47,167 @@
       canvas = document.getElementById('gameCanvas');
       if (!canvas) return console.error("Canvas not found");
       ctx = canvas.getContext('2d');
-      canvas.width = WIDTH; canvas.height = HEIGHT;
+      canvas.width  = WIDTH; canvas.height = HEIGHT;
 
       offscreen = document.createElement('canvas');
-      offscreen.width = WIDTH; offscreen.height = HEIGHT;
+      offscreen.width  = WIDTH; offscreen.height = HEIGHT;
       octx = offscreen.getContext('2d');
 
+      // Skyline layer
       skyCanvas = document.createElement('canvas');
-      skyCanvas.width = WIDTH; skyCanvas.height = HEIGHT;
+      skyCanvas.width  = WIDTH; skyCanvas.height = HEIGHT;
       skyCtx = skyCanvas.getContext('2d');
-
       generateSkyline();
-      console.log("✅ Setup complete. Starting loop…");
+
+      // Tilemap
+      tileset = genTileset();
+      initZone();
+
       requestAnimationFrame(loop);
     }
 
+    // ─── SKYLINE ─────────────────────────────────
     function generateSkyline() {
       skyCtx.fillStyle = 'rgba(50,50,70,0.2)';
       for (let i = 0; i < 25; i++) {
-        const w = 60 + Math.random() * 80;
-        const h = 100 + Math.random() * 150;
-        skyCtx.fillRect(i * (WIDTH / 25), HEIGHT - h - 50, w, h);
+        const w = 60 + Math.random()*80;
+        const h = 100 + Math.random()*150;
+        skyCtx.fillRect(i*(WIDTH/25), HEIGHT - h - 50, w, h);
       }
-      console.log("✅ Skyline generated");
     }
 
-    function loop(ts) {
-      const dt = ts - lastTs;
-      lastTs = ts;
-
-      // FPS logging
-      frameCount++; fpsTime += dt;
-      if (fpsTime >= 1000) {
-        console.log(`⚡ FPS: ${frameCount}`);
-        frameCount = fpsTime = 0;
+    // ─── TILESET ─────────────────────────────────
+    function genTileset() {
+      const c = document.createElement('canvas'), g = c.getContext('2d');
+      c.width = TILE * 7; c.height = TILE;
+      const pal = {
+        floor:    "#444",
+        wall:     "#222",
+        door:     "#a00",
+        water:    "#006",
+        building: "#555"
+      };
+      // floor, wall, door
+      ["floor","wall","door"].forEach((t,i) => {
+        g.fillStyle = pal[t];
+        g.fillRect(i*TILE, 0, TILE, TILE);
+        g.strokeStyle = "#0ff"; g.lineWidth = 1;
+        g.strokeRect(i*TILE+0.5, 0.5, TILE-1, TILE-1);
+      });
+      // water (IDs 3 & 4)
+      for (let wf=0; wf<2; wf++) {
+        const x0 = (3+wf)*TILE;
+        g.fillStyle = pal.water;
+        g.fillRect(x0,0,TILE,TILE);
+        g.strokeStyle="#0ff"; g.strokeRect(x0+0.5,0.5,TILE-1,TILE-1);
+        g.strokeStyle="rgba(255,255,255,0.5)"; g.beginPath();
+        for(let y=-1; y<=TILE; y+=8){
+          g.moveTo(x0-4, y+wf*4);
+          g.quadraticCurveTo(x0+TILE/2, y+4+wf*4, x0+TILE+4, y+wf*4);
+        }
+        g.stroke();
       }
+      // building (ID 5)
+      const b5 = 5*TILE;
+      g.fillStyle = pal.building; g.fillRect(b5,0,TILE,TILE);
+      g.strokeStyle="#0ff"; g.strokeRect(b5+0.5,0.5,TILE-1,TILE-1);
+      g.fillStyle="rgba(200,200,100,0.6)";
+      for(let y=4; y<TILE-4; y+=6) for(let x=4; x<TILE-4; x+=6)
+        g.fillRect(b5+x,y,3,3);
+      // conveyor (ID 6)
+      const b6 = 6*TILE;
+      g.fillStyle="#666"; g.fillRect(b6,0,TILE,TILE);
+      g.strokeStyle="#0ff"; g.strokeRect(b6+0.5,0.5,TILE-1,TILE-1);
+      g.fillStyle="#999"; g.fillRect(b6, TILE/2-2, TILE,4);
 
-      // DRAW EVERYTHING into offscreen
-      octx.setTransform(1,0,0,1,0,0);
-      octx.clearRect(0,0,WIDTH,HEIGHT);
+      return c;
+    }
 
-      // 1) Floor (placeholder)
-      octx.fillStyle = '#111';
-      octx.fillRect(0, 0, WIDTH, HEIGHT);
+    // ─── ZONE INIT (Street Layout) ─────────────────
+    function initZone() {
+      const m = Array(MAP_R).fill().map(()=>Array(MAP_C).fill(5));
+      // boundary walls
+      for (let x=0; x<MAP_C; x++){ m[0][x]=1; m[MAP_R-1][x]=1; }
+      for (let y=0; y<MAP_R; y++){ m[y][0]=1; m[y][MAP_C-1]=1; }
+      // street center & sidewalks
+      const ry = ~~(MAP_R/2), rw=3, sw=1;
+      for(let y=ry-~~(rw/2); y<=ry+~~(rw/2); y++)
+        for(let x=1;x<MAP_C-1;x++) m[y][x]=0;
+      for(let y=ry-~~(rw/2)-sw; y<=ry+~~(rw/2)+sw; y+=rw+2*sw)
+        for(let x=1;x<MAP_C-1;x++) m[y][x]=0;
+      // doors
+      for(let x=3;x<MAP_C-3;x+=8){
+        m[ry-~~(rw/2)-sw-1][x]=2;
+        m[ry+~~(rw/2)+sw+1][x+4]=2;
+      }
+      zone = { map: m, tileset };
+    }
 
-      // 2) Parallax skyline
-      cityOffset = (cityOffset + dt * 0.02) % WIDTH;
-      octx.drawImage(skyCanvas, -cityOffset, 0);
-      octx.drawImage(skyCanvas, WIDTH - cityOffset, 0);
+    // ─── CHUNKED RENDER ───────────────────────────
+    function drawChunks(vx, vy) {
+      for (let cy=0; cy<MAP_R; cy+=CHUNK_H) {
+        for (let cx=0; cx<MAP_C; cx+=CHUNK_W) {
+          const px = cx*TILE, py = cy*TILE;
+          if (px+CHUNK_W*TILE<vx || py+CHUNK_H*TILE<vy ||
+              px>vx+WIDTH    || py>vy+HEIGHT) continue;
+          for (let y=cy; y<cy+CHUNK_H; y++){
+            for (let x=cx; x<cx+CHUNK_W; x++){
+              const id = zone.map[y][x];
+              const fx = (id===3)?3 + Math.floor(Date.now()/500)%2 : id;
+              octx.drawImage(tileset,
+                fx*TILE,0,TILE,TILE,
+                x*TILE, y*TILE, TILE, TILE
+              );
+            }
+          }
+        }
+      }
+    }
 
-      // 3) Neon grid overlay
+    // ─── GRID OVERLAY ───────────────────────────
+    function drawGrid() {
       octx.save();
       octx.strokeStyle = 'rgba(255,0,255,0.15)';
       octx.lineWidth = 1;
-      for (let x = 0; x <= WORLD_W; x += TILE * 5) {
-        const sx = (x + cityOffset * 0.5) % WIDTH;
-        octx.beginPath(); octx.moveTo(sx, 0); octx.lineTo(sx, HEIGHT); octx.stroke();
+      for (let x=0; x<=WORLD_W; x+=TILE*5){
+        const sx=(x+cityOffset*0.5)%WIDTH;
+        octx.beginPath(); octx.moveTo(sx,0); octx.lineTo(sx,HEIGHT); octx.stroke();
       }
-      for (let y = 0; y <= WORLD_H; y += TILE * 5) {
-        const sy = (y + cityOffset * 0.3) % HEIGHT;
-        octx.beginPath(); octx.moveTo(0, sy); octx.lineTo(WIDTH, sy); octx.stroke();
+      for (let y=0; y<=WORLD_H; y+=TILE*5){
+        const sy=(y+cityOffset*0.3)%HEIGHT;
+        octx.beginPath(); octx.moveTo(0,sy); octx.lineTo(WIDTH,sy); octx.stroke();
       }
       octx.restore();
+    }
 
-      // BLIT offscreen to screen
+    // ─── MAIN LOOP ───────────────────────────────
+    function loop(ts) {
+      const dt = ts - lastTs; lastTs = ts;
+      cityOffset = (cityOffset + dt*0.02) % WIDTH;
+
+      // clear offscreen
+      octx.setTransform(1,0,0,1,0,0);
+      octx.clearRect(0,0,WIDTH,HEIGHT);
+
+      // 1) skyline
+      octx.drawImage(skyCanvas, -cityOffset,0);
+      octx.drawImage(skyCanvas, WIDTH-cityOffset,0);
+
+      // 2) tilemap
+      drawChunks(-0, -0);
+
+      // 3) grid
+      drawGrid();
+
+      // blit
       ctx.clearRect(0,0,WIDTH,HEIGHT);
-      ctx.drawImage(offscreen, 0, 0);
+      ctx.drawImage(offscreen,0,0);
 
       requestAnimationFrame(loop);
     }
 
+    // start!
+    init();
   })();
   </script>
 </body>
